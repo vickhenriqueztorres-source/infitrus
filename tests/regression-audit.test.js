@@ -82,7 +82,6 @@ test(
 // → 0 change points e marketStability igual ao valor inicial.
 test(
   "Caso 3 (ETAPA 03) — R-04: 30 chamadas de evaluate() com dados idênticos não disparam falsos Change Points",
-  { skip: "desbloqueado na ETAPA 03" },
   () => {
     const detector = new RegimeChangeDetector();
     const candles = generateCandles(30, 1.0850, "FLAT");

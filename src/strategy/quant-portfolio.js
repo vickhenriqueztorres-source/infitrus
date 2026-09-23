@@ -73,12 +73,6 @@ export class QuantPortfolio {
       minQuality: config.minQuality || 0.50,
       conflictThreshold: config.conflictThreshold || 0.010,
     });
-
-    // Rastreamento para deduplicação por candle
-    this.emittedSignals = new Map();
-
-    // Rastreamento de último sinal por ativo para feedback online
-    this.lastSignalPerSymbol = new Map();
   }
 
   setPayout(newPayout) {
@@ -141,7 +135,6 @@ export class QuantPortfolio {
         reasons: [`Coletando dados M1 (${len}/15 velas necessárias)`],
         uncertainty: 0.20,
         isDivergent: false,
-        isNewSignal: false,
         isConfluence: false,
         isConflict: false,
       };
@@ -222,32 +215,8 @@ export class QuantPortfolio {
       },
     });
 
-    // 5. Deduplicação e Congelamento por Candle (Anti-Repaint)
-    const dedupKey = `${sym}:${timeframeSeconds}:${lastCandle.timestamp}`;
-    const previousEmitted = this.emittedSignals.get(dedupKey);
-    const isNewSignal = decision.action !== "WAIT" && !previousEmitted;
-
-    let finalDecision = decision;
-    if (previousEmitted && typeof previousEmitted === "object") {
-      // Congelamento estrito: se esta vela já qualificou uma oportunidade,
-      // mantém a decisão congelada até o próximo candle (zero repainting)
-      finalDecision = previousEmitted;
-    } else if (decision.action !== "WAIT" && !previousEmitted) {
-      this.emittedSignals.set(dedupKey, decision);
-      if (this.emittedSignals.size > 250) {
-        const firstKey = this.emittedSignals.keys().next().value;
-        this.emittedSignals.delete(firstKey);
-      }
-
-      // Salva para feedback online na chegada da próxima vela
-      this.lastSignalPerSymbol.set(sym, {
-        subStrategy: decision.subStrategy,
-        action: decision.action,
-        probability: decision.conservativeProbability,
-        candleTimestamp: lastCandle.timestamp,
-        entryPrice: lastCandle.close,
-      });
-    }
+    // 5. Decisão Direta Pura (Sem mutações internas, deduplicação delegada ao SignalLifecycle)
+    const finalDecision = decision;
 
     // 6. Resumo das 5 Famílias para Compatibilidade com UI e Auditoria
     const familySummaryMap = {
@@ -319,7 +288,6 @@ export class QuantPortfolio {
       payout: this.payout,
       breakeven: finalDecision.breakeven,
       executionMoment: "AT_CANDLE_OPEN", // Entrada estrita na abertura da nova vela M1
-      isFrozen: Boolean(previousEmitted),
       strategiesResults,
       subStrategiesResults: allSubOpportunities,
       pooledCandidates,
@@ -334,29 +302,52 @@ export class QuantPortfolio {
       isDivergent: Boolean(finalDecision.isConflict),
       uncertainty: Number((1 - adaptation.marketStability).toFixed(4)),
       isVetoed: finalDecision.isVetoed,
-      isNewSignal,
     };
   }
 
   /**
-   * Atualização online quando uma vela M1 fecha e o resultado é observado.
+   * Atualização de estado APENAS quando uma vela fecha.
+   *
+   * @param {Array<Object>} closedCandles
+   * @param {Object} [features=null]
+   */
+  observeClosedCandle(closedCandles = [], features = null) {
+    if (this.regimeDetector?.observeClosedCandle) {
+      this.regimeDetector.observeClosedCandle(closedCandles, features);
+    }
+    if (this.featureBuilder?.observeClosedCandle) {
+      this.featureBuilder.observeClosedCandle(closedCandles, features);
+    }
+  }
+
+  /**
+   * Registra resultado real da operação (WIN/LOSS) para calibração online.
+   *
+   * @param {Object} snapshot - Snapshot imutável gerado na emissão do sinal
+   * @param {boolean} won - true se WIN, false se LOSS
+   */
+  recordOutcome(snapshot, won) {
+    if (!snapshot) return;
+    const subStrategy = snapshot.subStrategy;
+    const direction = snapshot.action;
+    const prob = snapshot.conservativeProbability ?? snapshot.probability ?? 0.5;
+    const outcomeUp = won ? (direction === "CALL" ? 1 : 0) : (direction === "CALL" ? 0 : 1);
+
+    if (subStrategy && this.opportunityPool) {
+      this.opportunityPool.recordOutcome(subStrategy, direction, prob, outcomeUp);
+    }
+    if (this.familyAnalogy?.update) {
+      this.familyAnalogy.update(null, outcomeUp);
+    }
+  }
+
+  /**
+   * Atualização online legada (compatibilidade retroativa).
    *
    * @param {string} symbol
-   * @param {number} actualOutcomeUp - 1 se a vela fechou em alta, 0 se baixa, 0.5 se doji
+   * @param {number} actualOutcomeUp - 1 se alta, 0 se baixa, 0.5 se doji
    */
   onCandleClosed(symbol, actualOutcomeUp) {
-    const sym = String(symbol || "").trim().toUpperCase();
-    const lastSig = this.lastSignalPerSymbol.get(sym);
-
-    if (lastSig && lastSig.subStrategy && this.opportunityPool) {
-      this.opportunityPool.recordOutcome(
-        lastSig.subStrategy,
-        lastSig.action,
-        lastSig.probability,
-        actualOutcomeUp
-      );
-    }
-
     if (this.familyAnalogy?.update) {
       this.familyAnalogy.update(null, actualOutcomeUp);
     }

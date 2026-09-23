@@ -30,7 +30,7 @@ test("QuantPortfolio: Orquestração das 5 estratégias e diagnóstico consolida
   portfolio.onCandleClosed("EURUSD", 1);
 });
 
-test("QuantPortfolio: Detecção de confluência e deduplicação de sinal", () => {
+test("QuantPortfolio: Avaliação pura e idempotente (sem mutação de estado)", () => {
   const portfolio = new QuantPortfolio({ payout: 0.80, minEV: 0.005 });
 
   const candles = generateCandles(60, 1.0850, "UP");
@@ -41,16 +41,12 @@ test("QuantPortfolio: Detecção de confluência e deduplicação de sinal", () 
     isReady: true,
   });
 
-  // Se disparou sinal, rep2 no mesmo timestamp deve ser marcado como NÃO novo (isNewSignal: false)
-  if (rep1.action !== "WAIT") {
-    assert.equal(rep1.isNewSignal, true);
+  const rep2 = portfolio.evaluate({
+    symbol: "EURUSD",
+    timeframeSeconds: 60,
+    candles,
+    isReady: true,
+  });
 
-    const rep2 = portfolio.evaluate({
-      symbol: "EURUSD",
-      timeframeSeconds: 60,
-      candles,
-      isReady: true,
-    });
-    assert.equal(rep2.isNewSignal, false);
-  }
+  assert.deepEqual(rep1, rep2, "Avaliação consecutiva com mesmos inputs deve produzir resultado estritamente idêntico");
 });

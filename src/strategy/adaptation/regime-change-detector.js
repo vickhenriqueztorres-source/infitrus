@@ -10,6 +10,10 @@
  * 2. Algoritmo CUSUM bicaudal para detectar mudança abrupta na distribuição de retornos/volatilidade.
  * 3. Modula o peso temporal: quando detecta mudança, aplica decaimento rápido nos dados antigos
  *    e eleva temporariamente o limiar de incerteza, SEM bloquear o sistema (preserva frequência).
+ *
+ * Arquitetura Pura:
+ * - `evaluate(candles, rawFeatures)` é ESTRITAMENTE SOMENTE LEITURA (zero efeitos colaterais).
+ * - `observeClosedCandle(closedCandle, rawFeatures)` atualiza o estado CUSUM uma vez por vela fechada.
  */
 
 export class RegimeChangeDetector {
@@ -17,15 +21,53 @@ export class RegimeChangeDetector {
     this.cusumThreshold = config.cusumThreshold || 4.5;
     this.decayBase = config.decayBase || 0.05;
 
-    // Estado CUSUM
+    // Estado CUSUM persistente
     this.sPos = 0;
     this.sNeg = 0;
+    this.lastObservedCandle = 0;
     this.lastChangePointCandle = 0;
     this.marketStability = 1.0;
+    this.isChangePoint = false;
   }
 
   /**
-   * Avalia a estabilidade do mercado e detecta pontos de mudança estrutural (Change Point).
+   * Atualiza os acumuladores CUSUM e a estabilidade de mercado a cada vela fechada.
+   * Ignora se o timestamp for igual ou anterior ao último observado (idempotência).
+   *
+   * @param {Object} closedCandle
+   * @param {Object} [rawFeatures={}]
+   */
+  observeClosedCandle(closedCandle, rawFeatures = {}) {
+    if (!closedCandle || !closedCandle.timestamp) return;
+    if (closedCandle.timestamp <= this.lastObservedCandle) return;
+    this.lastObservedCandle = closedCandle.timestamp;
+
+    const r1 = rawFeatures.r1 || 0;
+    const sigma5 = rawFeatures.sigma5 || 1e-4;
+    const vr3_20 = rawFeatures.vr3_20 || 1.0;
+
+    const normalizedReturn = r1 / Math.max(1e-6, sigma5);
+    const slack = 0.5; // Margem de tolerância CUSUM
+
+    this.sPos = Math.max(0, this.sPos + normalizedReturn - slack);
+    this.sNeg = Math.max(0, this.sNeg - normalizedReturn - slack);
+
+    this.isChangePoint = this.sPos > this.cusumThreshold || this.sNeg > this.cusumThreshold || vr3_20 > 2.8;
+
+    if (this.isChangePoint) {
+      this.lastChangePointCandle = closedCandle.timestamp;
+      this.sPos = 0;
+      this.sNeg = 0;
+      this.marketStability = 0.35; // Queda temporária de estabilidade
+    } else {
+      // Recuperação gradual da estabilidade (convergência de volta para 1.0)
+      this.marketStability = Math.min(1.0, this.marketStability + 0.08);
+    }
+  }
+
+  /**
+   * Avalia a estabilidade do mercado e o regime atual.
+   * Método ESTRITAMENTE PURO (somente leitura, não muta o estado interno).
    *
    * @param {Array<{ close: number, open: number, high: number, low: number, timestamp: number }>} candles
    * @param {Object} rawFeatures
@@ -45,8 +87,6 @@ export class RegimeChangeDetector {
     }
 
     const lastCandle = candles[n - 1];
-    const r1 = rawFeatures.r1 || 0;
-    const sigma5 = rawFeatures.sigma5 || 1e-4;
     const vr3_20 = rawFeatures.vr3_20 || 1.0;
     const persistence = rawFeatures.persistence || 0;
 
@@ -65,30 +105,12 @@ export class RegimeChangeDetector {
       regimeProb = 0.90;
     }
 
-    // 2. Detecção de Change Point via CUSUM em retornos padronizados
-    const normalizedReturn = r1 / Math.max(1e-6, sigma5);
-    const slack = 0.5; // Margem de tolerância CUSUM
+    // 2. Avaliação de Change Point instantâneo ou registrado
+    const isChangePoint = this.isChangePoint || vr3_20 > 2.8;
 
-    this.sPos = Math.max(0, this.sPos + normalizedReturn - slack);
-    this.sNeg = Math.max(0, this.sNeg - normalizedReturn - slack);
-
-    const isChangePoint = this.sPos > this.cusumThreshold || this.sNeg > this.cusumThreshold || vr3_20 > 2.8;
-
-    if (isChangePoint) {
-      this.lastChangePointCandle = lastCandle.timestamp;
-      // Reseta acumuladores CUSUM após disparo
-      this.sPos = 0;
-      this.sNeg = 0;
-      this.marketStability = 0.35; // Queda temporária de estabilidade
-    } else {
-      // Recuperação gradual da estabilidade (convergência de volta para 1.0)
-      this.marketStability = Math.min(1.0, this.marketStability + 0.08);
-    }
-
-    // 3. Fatores de Adaptação
     // Se houve mudança recente (nas últimas 5 velas):
     const candlesSinceChange = (lastCandle.timestamp - this.lastChangePointCandle) / 60;
-    const isRecentChange = candlesSinceChange <= 5;
+    const isRecentChange = isChangePoint || candlesSinceChange <= 5;
 
     let uncertaintyMultiplier = 1.0;
     let temporalDecayFactor = this.decayBase;
@@ -96,7 +118,6 @@ export class RegimeChangeDetector {
     if (isRecentChange) {
       // Eleva o limiar de margem de incerteza temporariamente (+25%), sem desligar os modelos
       uncertaintyMultiplier = 1.25;
-      // Desconta dados antigos mais rapidamente (decaimento mais agressivo)
       temporalDecayFactor = 0.15;
     }
 

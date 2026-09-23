@@ -263,8 +263,7 @@ export class FeatureVectorBuilder {
     Object.assign(allSignals, resInteractions.signals);
     Object.assign(allRawFeatures, resInteractions.rawFeatures);
 
-    // 3. Padronização Welford Online Z-Score
-    this.featureCount++;
+    // 3. Padronização Welford Z-Score (leitura pura, sem mutação durante build)
     const featureNames = Object.keys(allRawFeatures).sort();
     const standardizedVector = [];
 
@@ -275,18 +274,10 @@ export class FeatureVectorBuilder {
         continue;
       }
 
-      if (this.featureMeans[name] === undefined) {
-        this.featureMeans[name] = val;
-        this.featureVars[name] = 1.0;
-      } else {
-        const alpha = Math.min(0.05, 1 / this.featureCount);
-        const diff = val - this.featureMeans[name];
-        this.featureMeans[name] += alpha * diff;
-        this.featureVars[name] = (1 - alpha) * this.featureVars[name] + alpha * (diff ** 2);
-      }
-
-      const std = Math.sqrt(this.featureVars[name]) || 1.0;
-      const z = (val - this.featureMeans[name]) / std;
+      const mean = this.featureMeans[name] !== undefined ? this.featureMeans[name] : val;
+      const variance = this.featureVars[name] !== undefined ? this.featureVars[name] : 1.0;
+      const std = Math.sqrt(variance) || 1.0;
+      const z = (val - mean) / std;
       const clampedZ = Math.max(-4, Math.min(4, z));
       standardizedVector.push(Number(clampedZ.toFixed(4)));
     }
@@ -298,4 +289,35 @@ export class FeatureVectorBuilder {
       volatilityState: resVol.volatilityState || "normal",
     };
   }
+
+  /**
+   * Atualização Welford online de médias e variâncias APENAS no fechamento da vela.
+   *
+   * @param {Array<Object>} closedCandles
+   * @param {Object} [rawFeatures=null]
+   */
+  observeClosedCandle(closedCandles = [], rawFeatures = null) {
+    let features = rawFeatures;
+    if (!features && Array.isArray(closedCandles) && closedCandles.length >= 10) {
+      const built = this.build(closedCandles);
+      features = built.featureMap;
+    }
+    if (!features || typeof features !== "object") return;
+
+    this.featureCount++;
+    const alpha = Math.min(0.05, 1 / this.featureCount);
+
+    for (const [name, val] of Object.entries(features)) {
+      if (!Number.isFinite(val)) continue;
+      if (this.featureMeans[name] === undefined) {
+        this.featureMeans[name] = val;
+        this.featureVars[name] = 1.0;
+      } else {
+        const diff = val - this.featureMeans[name];
+        this.featureMeans[name] += alpha * diff;
+        this.featureVars[name] = (1 - alpha) * this.featureVars[name] + alpha * (diff ** 2);
+      }
+    }
+  }
 }
+

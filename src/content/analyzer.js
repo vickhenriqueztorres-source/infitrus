@@ -19,8 +19,8 @@ import { normalizeWebSocketPayload, normalizeHistoryBars } from "../market/candl
 import { isValidCandle } from "../market/candle-validator.js";
 import { CandleStore } from "../market/candle-store.js";
 import { DataQualityTracker, MarketState } from "../market/data-quality.js";
-import { StrategyEngine, SignalAction } from "../strategy/strategy-engine.js";
 import { QuantPortfolio } from "../strategy/quant-portfolio.js";
+import { PortfolioRegistry } from "../strategy/portfolio-registry.js";
 import { signalAuditor } from "../strategy/signal-auditor.js";
 import { intraminuteTracker } from "../market/intraminute-tracker.js";
 import { audioAlertManager } from "../utils/audio-alerts.js";
@@ -46,7 +46,8 @@ export class MarketAnalyzer {
     this.intraminuteTracker = intraminuteTracker;
 
     // Portfólio da Nova Arquitetura Probabilística M1 e Auditor de Sinais
-    this.quantPortfolio = new QuantPortfolio({ payout: 0.80, minEdge: 0.015 });
+    this.payout = 0.80;
+    this.registry = new PortfolioRegistry((pair) => new QuantPortfolio({ payout: this.payout, minEdge: 0.015 }));
     this.signalAuditor = signalAuditor;
     this.quantReport = {
       action: "WAIT",
@@ -236,7 +237,9 @@ export class MarketAnalyzer {
 
         if (result.closedCandle) {
           const outcomeUp = result.closedCandle.close > result.closedCandle.open ? 1 : 0;
-          this.quantPortfolio.onCandleClosed(sym, outcomeUp);
+          const closedSeries = this.store.getCandles(sym, this.timeframeSeconds, 150);
+          this.registry.get(sym).observeClosedCandle(closedSeries);
+          this.registry.get(sym).onCandleClosed(sym, outcomeUp);
         }
 
         const closedSeries = this.store.getCandles(sym, this.timeframeSeconds, 150);
@@ -318,7 +321,7 @@ export class MarketAnalyzer {
         lastCandle ? lastCandle.close : null
       );
 
-      const qReport = this.quantPortfolio.evaluate({
+      const qReport = this.registry.get(sym).evaluate({
         symbol: sym,
         timeframeSeconds: this.timeframeSeconds,
         candles: closedCandles,
@@ -349,7 +352,7 @@ export class MarketAnalyzer {
           ev: qReport.ev,
           edge: qReport.edge,
           quality: qReport.quality,
-          payout: this.quantPortfolio.payout,
+          payout: this.registry.get(sym).payout,
           primaryStrategyName: qReport.subStrategy || qReport.strategyName || "Quant",
           subStrategy: qReport.subStrategy,
           correlationGroup: qReport.correlationGroup,
@@ -438,7 +441,7 @@ export class MarketAnalyzer {
         subStrategiesResults: qReport.subStrategiesResults || [],
         microstructure: microMetrics,
         quantReasons: qReport.reasons || [],
-        payout: this.quantPortfolio.payout,
+        payout: this.registry.get(sym).payout,
         signalsHistory: this.signalAuditor.getSignals().slice(0, 20),
         stats: this.signalAuditor.getStats(),
         signal: displayAction !== "WAIT" ? displayAction : "WAIT",
@@ -564,7 +567,7 @@ export class MarketAnalyzer {
             isDivergent: this.quantReport?.isDivergent || false,
             strategiesResults: this.quantReport?.strategiesResults || [],
             quantReasons: this.quantReport?.reasons || [],
-            payout: this.quantPortfolio?.payout || 0.80,
+            payout: this.payout || 0.80,
             signalsHistory: this.signalAuditor.getSignals().slice(0, 20),
             stats: this.signalAuditor.getStats(),
             // Legado
@@ -577,6 +580,10 @@ export class MarketAnalyzer {
         "*"
       );
     } catch (e) {}
+  }
+
+  get quantPortfolio() {
+    return this.registry.get(this.currentSymbol);
   }
 
   setupChildToParentBridge() {
@@ -613,7 +620,8 @@ export class MarketAnalyzer {
       }
 
       if (event.data.type === "ORACLE_SET_PAYOUT" && event.data.payout) {
-        this.quantPortfolio.setPayout(event.data.payout);
+        this.payout = event.data.payout;
+        this.registry.setGlobalPayout(event.data.payout);
         this.updatePanelDisplay();
         return;
       }
@@ -679,7 +687,8 @@ export class MarketAnalyzer {
     if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener((msg) => {
         if (msg && msg.type === "ORACLE_SET_PAYOUT" && msg.payout) {
-          this.quantPortfolio.setPayout(msg.payout);
+          this.payout = msg.payout;
+          this.registry.setGlobalPayout(msg.payout);
           this.updatePanelDisplay();
         }
       });
