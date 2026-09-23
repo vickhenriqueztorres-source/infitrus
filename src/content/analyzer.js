@@ -21,6 +21,8 @@ import { CandleStore } from "../market/candle-store.js";
 import { DataQualityTracker, MarketState } from "../market/data-quality.js";
 import { QuantPortfolio } from "../strategy/quant-portfolio.js";
 import { PortfolioRegistry } from "../strategy/portfolio-registry.js";
+import { SignalLifecycle, Phase } from "../strategy/signal-lifecycle.js";
+import { LIFECYCLE } from "../strategy/lifecycle-config.js";
 import { signalAuditor } from "../strategy/signal-auditor.js";
 import { intraminuteTracker } from "../market/intraminute-tracker.js";
 import { audioAlertManager } from "../utils/audio-alerts.js";
@@ -39,16 +41,85 @@ export class MarketAnalyzer {
     this._lastLoggedPrices = new Map();
     this.store = new CandleStore({ maxCandlesPerSeries: 500 });
 
-    // Inicia cronômetro da vela M1
-    candleTimer.start();
+    if (typeof window !== "undefined") {
+      candleTimer.start();
+    }
     this.quality = new DataQualityTracker({ staleTimeoutMs: 15000, minHistoryBars: 10 });
-    this.strategy = new StrategyEngine({ emaFastPeriod: 9, emaSlowPeriod: 21, rsiPeriod: 14 });
     this.intraminuteTracker = intraminuteTracker;
 
     // Portfólio da Nova Arquitetura Probabilística M1 e Auditor de Sinais
     this.payout = 0.80;
     this.registry = new PortfolioRegistry((pair) => new QuantPortfolio({ payout: this.payout, minEdge: 0.015 }));
     this.signalAuditor = signalAuditor;
+    this.lifecycle = new SignalLifecycle();
+    this.lastDecideAt = 0;
+    this.lastCachedDecision = null;
+    this.currentLifecycleSnapshot = null;
+
+    // Conexão dos Eventos do SignalLifecycle (Único ponto com efeitos colaterais de sinal)
+    this.lifecycle.onEvent((event, lc) => {
+      if (event === Phase.PRE_SIGNAL) {
+        this.signalAuditor.recordSignal({
+          id: lc.id,
+          action: lc.direction,
+          symbol: lc.pair,
+          timeframeSeconds: lc.tf,
+          candleTimestamp: lc.formingTs,
+          targetTimestamp: lc.targetTs,
+          probability: lc.snapshot?.probability ?? 0.5,
+          conservativeProbability: lc.snapshot?.conservativeProbability ?? lc.snapshot?.probability,
+          ev: lc.snapshot?.ev ?? 0,
+          edge: lc.snapshot?.edge ?? 0,
+          quality: lc.snapshot?.quality ?? 0,
+          payout: this.registry.get(lc.pair).payout,
+          subStrategy: lc.snapshot?.subStrategy,
+          primaryStrategyName: lc.snapshot?.strategyName || lc.snapshot?.subStrategy,
+          correlationGroup: lc.snapshot?.correlationGroup,
+          reasons: lc.snapshot?.reasons || [],
+        });
+
+        logger.success(
+          "SINAL",
+          `🚀 PRE-SEÑAL M1 [${lc.direction} ${lc.pair} - ${lc.snapshot?.subStrategy || "Quant"}]: Prob: ${((lc.snapshot?.probability || 0.5) * 100).toFixed(1)}% | Entrada no início da próxima vela`
+        );
+        if (lc.direction === "CALL") audioAlertManager.playCallAlert();
+        else if (lc.direction === "PUT") audioAlertManager.playPutAlert();
+
+        if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+          try {
+            chrome.runtime.sendMessage({
+              type: "ORACLE_NEW_SIGNAL",
+              signal: {
+                id: lc.id,
+                action: lc.direction,
+                symbol: lc.pair,
+                timeframeSeconds: lc.tf,
+                candleTimestamp: lc.formingTs,
+                targetTimestamp: lc.targetTs,
+                probability: lc.snapshot?.probability ?? 0.5,
+                tabId: this.tabId,
+              },
+            }).catch(() => {});
+          } catch (_) {}
+        }
+        this.updatePanelDisplay();
+      } else if (event === Phase.ENTRY_NOW || event === Phase.IN_TRADE) {
+        this.updatePanelDisplay();
+      } else if (event === Phase.SETTLED) {
+        this.signalAuditor.settle(lc.id, {
+          result: lc.result,
+          entryPrice: lc.entryPrice,
+          closePrice: lc.closePrice,
+        });
+        if (lc.result === "WIN" || lc.result === "LOSS") {
+          this.registry.get(lc.pair).recordOutcome(lc.snapshot, lc.result === "WIN");
+        }
+        this.updatePanelDisplay();
+      } else if (event === Phase.CANCELLED) {
+        this.signalAuditor.cancel(lc.id, lc.reason);
+        this.updatePanelDisplay();
+      }
+    });
     this.quantReport = {
       action: "WAIT",
       label: "AGUARDAR",
@@ -118,13 +189,79 @@ export class MarketAnalyzer {
       this.setupParentFrameReceiver();
     }
 
-    // 4. Verificação periódica de Heartbeat / Stale feed a cada 2.5s
-    setInterval(() => {
-      this.quality.checkStale(this.currentSymbol, this.timeframeSeconds);
-      this.updatePanelDisplay();
-    }, 2500);
+    // 4. Verificação periódica de Heartbeat / Stale feed a cada 2.5s e loop contínuo do SignalLifecycle
+    if (typeof window !== "undefined") {
+      setInterval(() => {
+        this.quality.checkStale(this.currentSymbol, this.timeframeSeconds);
+        this.updatePanelDisplay();
+      }, 2500);
+
+      setInterval(() => {
+        this.tickLifecycle();
+      }, 250);
+    }
 
     logger.info("SISTEMA", `Analyzer ativo em ${typeof window !== "undefined" && window === window.top ? "janela principal" : "iframe gráfico"}`);
+  }
+
+  /**
+   * Executa um ciclo de vida de sinal controlado por tempo e qualidade de dados.
+   *
+   * @param {Object} [options={}]
+   * @param {number} [options.nowSec=null]
+   * @param {Function} [options.decide=null]
+   * @param {boolean} [options.dataOk=null]
+   * @returns {Object} Snapshot do lifecycle
+   */
+  tickLifecycle({ nowSec = null, decide = null, dataOk = null } = {}) {
+    const pair = this.currentSymbol;
+    const tf = this.timeframeSeconds;
+
+    if (tf !== LIFECYCLE.SUPPORTED_TF_SEC) {
+      this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED" };
+      return this.currentLifecycleSnapshot;
+    }
+
+    const currentNowSec = nowSec ?? marketClock.nowSec();
+    let currentDataOk = dataOk;
+    if (currentDataOk === null) {
+      const report = this.quality.evaluate();
+      const isReady = this.store.isReady(pair, tf);
+      currentDataOk = isReady && report.state === MarketState.READY;
+    }
+
+    const decideFn = decide ?? (() => {
+      const now = Date.now();
+      if (now - this.lastDecideAt < 300 && this.lastCachedDecision) {
+        return this.lastCachedDecision;
+      }
+      const closedCandles = this.store.getCandles(pair, tf, 150);
+      const microMetrics = this.intraminuteTracker.getCurrentMetrics(pair, tf);
+      const decision = this.registry.get(pair).evaluate({
+        symbol: pair,
+        timeframeSeconds: tf,
+        candles: closedCandles,
+        microMetrics,
+        isReady: currentDataOk,
+        gapCount: 0,
+        isStale: false,
+      });
+      this.lastDecideAt = now;
+      this.lastCachedDecision = decision;
+      this.quantReport = decision;
+      return decision;
+    });
+
+    const snapshot = this.lifecycle.step({
+      pair,
+      tf,
+      nowSec: currentNowSec,
+      dataOk: currentDataOk,
+      decide: decideFn,
+    });
+
+    this.currentLifecycleSnapshot = snapshot;
+    return snapshot;
   }
 
   handleSocketStatus(info) {
@@ -220,6 +357,10 @@ export class MarketAnalyzer {
       const result = this.store.ingest(candle);
       this.quality.onRealtimeUpdate(sym, this.timeframeSeconds, result);
 
+      if (sym === this.currentSymbol) {
+        this.tickLifecycle();
+      }
+
       const priceStr = candle.close.toFixed(5);
       this.lastPrices.set(sym, priceStr);
       if (sym === this.currentSymbol) {
@@ -229,6 +370,7 @@ export class MarketAnalyzer {
       if (result.status === "NEW_CANDLE") {
         if (sym === this.currentSymbol && this.timeframeSeconds === 60) {
           marketClock.observeCandleOpen(candle.timestamp, candle.receivedAt);
+          this.lifecycle.onCandleOpen(sym, this.timeframeSeconds, candle.timestamp, candle.open);
         }
         logger.success(
           "STORE",
@@ -236,10 +378,11 @@ export class MarketAnalyzer {
         );
 
         if (result.closedCandle) {
-          const outcomeUp = result.closedCandle.close > result.closedCandle.open ? 1 : 0;
+          if (sym === this.currentSymbol) {
+            this.lifecycle.onCandleClose(sym, this.timeframeSeconds, result.closedCandle);
+          }
           const closedSeries = this.store.getCandles(sym, this.timeframeSeconds, 150);
           this.registry.get(sym).observeClosedCandle(closedSeries);
-          this.registry.get(sym).onCandleClosed(sym, outcomeUp);
         }
 
         const closedSeries = this.store.getCandles(sym, this.timeframeSeconds, 150);
@@ -331,66 +474,6 @@ export class MarketAnalyzer {
         isStale: report.state === MarketState.STALE,
       });
 
-      // Janela de Decisão M1: Apenas consolida e grava sinal oficial nos últimos 15 segundos da vela (segundos 45-59)
-      const timerState = candleTimer.getState();
-      const inDecisionWindow =
-        timerState.remainingSeconds <= 15 ||
-        timerState.phase === "WARNING" ||
-        timerState.phase === "PREPARE" ||
-        timerState.phase === "EXECUTE";
-
-      if (qReport.isNewSignal && qReport.action !== "WAIT" && inDecisionWindow) {
-        const record = this.signalAuditor.recordSignal({
-          action: qReport.action,
-          label: qReport.label,
-          symbol: sym,
-          timeframeSeconds: this.timeframeSeconds,
-          candleTimestamp: qReport.candleTimestamp,
-          entryPrice: qReport.entryPrice,
-          probability: qReport.probability,
-          conservativeProbability: qReport.conservativeProbability,
-          ev: qReport.ev,
-          edge: qReport.edge,
-          quality: qReport.quality,
-          payout: this.registry.get(sym).payout,
-          primaryStrategyName: qReport.subStrategy || qReport.strategyName || "Quant",
-          subStrategy: qReport.subStrategy,
-          correlationGroup: qReport.correlationGroup,
-          reasons: qReport.reasons,
-        });
-
-        if (record) {
-          logger.success(
-            "SINAL",
-            `🚀 SINAL M1 [${qReport.action} ${sym} - ${qReport.strategyName || "Quant"}]: Prob: ${(qReport.probability * 100).toFixed(1)}% | Edge: +${(qReport.edge * 100).toFixed(1)}% | Qualidade: ${(qReport.quality * 100).toFixed(0)}%`
-          );
-          if (qReport.action === "CALL") {
-            audioAlertManager.playCallAlert();
-          } else if (qReport.action === "PUT") {
-            audioAlertManager.playPutAlert();
-          }
-
-          // Notifica o Side Panel nativo para tocar som e atualizar imediatamente
-          if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-            try {
-              chrome.runtime.sendMessage({
-                type: "ORACLE_NEW_SIGNAL",
-                signal: {
-                  ...record,
-                  action: qReport.action,
-                  strategyName: qReport.strategyName,
-                  subStrategy: qReport.subStrategy,
-                  probability: qReport.probability,
-                  edge: qReport.edge,
-                  quality: qReport.quality,
-                  reasons: qReport.reasons,
-                },
-              }).catch(() => {});
-            } catch (_) {}
-          }
-        }
-      }
-
       const cSignal = this.strategy.evaluate({
         symbol: sym,
         timeframeSeconds: this.timeframeSeconds,
@@ -406,10 +489,18 @@ export class MarketAnalyzer {
 
       const symPrice = this.lastPrices.get(sym) || (sym === this.currentSymbol ? this.lastPrice : "---");
 
-      // Durante os primeiros 45 segundos da vela M1, mantém o sinal visual em WAIT (Escaneamento).
-      // O sinal oficial só é transmitido e exibido nos últimos 15 segundos (janela de decisão).
-      const displayAction = inDecisionWindow ? qReport.action : "WAIT";
-      const displayLabel = inDecisionWindow ? qReport.label : "ESCANEANDO";
+      // Sinal visual e fase gerenciados estritamente pelo SignalLifecycle
+      const lifecycle = this.currentLifecycleSnapshot || this.lifecycle.snapshot(sym, this.timeframeSeconds, marketClock.nowSec());
+      const activeItem = (lifecycle.trade && ["ENTRY_NOW", "IN_TRADE"].includes(lifecycle.trade.phase))
+        ? lifecycle.trade
+        : (lifecycle.current && lifecycle.current.phase === Phase.PRE_SIGNAL)
+          ? lifecycle.current
+          : null;
+
+      const displayAction = activeItem?.direction || "WAIT";
+      const displayLabel = activeItem
+        ? (activeItem.phase === Phase.ENTRY_NOW ? "ENTRA AHORA" : activeItem.phase === Phase.IN_TRADE ? "EN OPERACIÓN" : "PRE-SEÑAL")
+        : "ESCANEANDO";
 
       symbolsMap[sym] = {
         frameStatus: typeof window !== "undefined" && window !== window.top ? "iframe conectado" : "conectado",
@@ -427,6 +518,7 @@ export class MarketAnalyzer {
         lastPrice: symPrice,
         gaps: report.gapCount,
         state: isReady ? MarketState.READY : report.state,
+        lifecycle,
         quantAction: displayAction,
         quantLabel: displayLabel,
         quantProbability: qReport.probability,
@@ -557,6 +649,7 @@ export class MarketAnalyzer {
             lastTimestamp: lastCandle?.timestamp,
             historyCount: candlesCount,
             gapCount: report.gapCount,
+            lifecycle: this.currentLifecycleSnapshot || this.lifecycle?.snapshot(this.currentSymbol, this.timeframeSeconds, marketClock.nowSec()),
             // Portfólio das 5 Estratégias
             quantAction: this.quantReport?.action || "WAIT",
             quantLabel: this.quantReport?.label || "AGUARDAR",

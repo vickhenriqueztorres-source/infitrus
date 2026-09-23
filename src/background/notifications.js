@@ -16,7 +16,7 @@ async function notifySignal(signal) {
     type: "basic",
     iconUrl: chrome.runtime.getURL("assets/icons/icon-128.png"),
     title: `Señal interceptada · ${signal.direction} ${arrow}`,
-    message: `${signal.asset} · ${signal.timeframe} · Válida por ${signal.validRemainingSec}s`,
+    message: `${signal.asset} · ${signal.timeframe} · Entrada en la apertura de la próxima vela`,
     priority: 2,
   });
   chrome.storage.local.set({ [LAST_NOTIFICATION_KEY]: signal.id });

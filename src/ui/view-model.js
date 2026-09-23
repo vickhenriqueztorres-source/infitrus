@@ -50,6 +50,52 @@ function latestSignal(data, direction) {
 }
 
 function makeSignal(data, timer, now, debugState) {
+  const lc = data.lifecycle;
+  if (lc) {
+    const current = lc.current;
+    const trade = lc.trade;
+    const lastResult = lc.lastResult;
+
+    let item = null;
+    if (trade && (trade.phase === "ENTRY_NOW" || trade.phase === "IN_TRADE")) {
+      item = trade;
+    } else if (current && current.phase === "PRE_SIGNAL") {
+      item = current;
+    } else if (lastResult && lastResult.phase === "SETTLED") {
+      item = lastResult;
+    } else if (current && current.phase === "CANCELLED") {
+      item = current;
+    }
+
+    if (item && item.direction) {
+      const phaseMap = {
+        PRE_SIGNAL: "PRE-SEÑAL",
+        ENTRY_NOW: "ENTRA AHORA",
+        IN_TRADE: "EN OPERACIÓN",
+        SETTLED: item.result || "FINALIZADO",
+        CANCELLED: "SEÑAL CANCELADA",
+      };
+
+      const direction = item.direction;
+      const recordedAt = item.lockedAt ? item.lockedAt * 1000 : finite(data.updatedAt, now);
+      return {
+        id: item.id || `${direction}:${recordedAt}`,
+        direction,
+        arrow: direction === "CALL" ? "▲" : "▼",
+        phase: item.phase === "PRE_SIGNAL" || item.phase === "ENTRY_NOW" ? "live" : item.phase.toLowerCase(),
+        rawPhase: item.phase,
+        phaseLabel: phaseMap[item.phase] || "ANALIZANDO",
+        result: item.result,
+        reason: item.reason,
+        probability: item.probability,
+        validForSec: 60,
+        validRemainingSec: Math.max(0, finite(timer.remainingSeconds, 60)),
+        progress: Math.max(0, Math.min(1, finite(timer.progressPct, 0) / 100)),
+        recordedAt,
+      };
+    }
+  }
+
   const direction = signalDirection(data);
   if (!direction && debugState !== "SENAL") return null;
   const effectiveDirection = direction || "CALL";
@@ -66,6 +112,7 @@ function makeSignal(data, timer, now, debugState) {
     direction: effectiveDirection,
     arrow: effectiveDirection === "CALL" ? "▲" : "▼",
     phase,
+    phaseLabel: phase === "live" ? "PRE-SEÑAL" : "FINALIZADO",
     validForSec: 5,
     validRemainingSec: debugLive ? 5 : remaining,
     progress: phase === "live" ? (debugLive ? 1 : remaining / 5) : 0,

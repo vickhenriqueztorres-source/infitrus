@@ -11,6 +11,7 @@ import { marketClock } from "../src/utils/market-clock.js";
 import { SignalAuditor } from "../src/strategy/signal-auditor.js";
 import { RegimeChangeDetector } from "../src/strategy/adaptation/regime-change-detector.js";
 import { QuantPortfolio } from "../src/strategy/quant-portfolio.js";
+import { MarketAnalyzer } from "../src/content/analyzer.js";
 import { generateCandles } from "./mock-data-helper.js";
 
 // Caso 1 (ETAPA 02) — T-01: sincronizar o CandleTimer com o horário de abertura da vela não pode deixar o cronômetro em remaining=60.
@@ -41,7 +42,6 @@ test(
 // Registre um CALL na vela T, faça ingest do 1º tick de T+60 (closed=false) e verifique que o sinal continua PENDING.
 test(
   "Caso 2 (ETAPA 04) — A-01: SignalAuditor não pode liquidar sinal com vela não fechada (closed=false)",
-  { skip: "desbloqueado na ETAPA 04" },
   () => {
     const auditor = new SignalAuditor();
     const t = 1727010000;
@@ -106,53 +106,56 @@ test(
 // Troque a decisão para PUT e mande ticks de T+60 até T+63. A direção exibida continua CALL e existe exatamente 1 evento de sinal novo.
 test(
   "Caso 4 (ETAPA 04) — R-01/R-03: virada da vela não inverte sinal de CALL para PUT nos primeiros segundos",
-  { skip: "desbloqueado na ETAPA 04" },
   () => {
-    const portfolio = new QuantPortfolio({ payout: 0.80 });
+    const analyzer = new MarketAnalyzer();
     const t = 1727010000;
+    let newSignalEvents = 0;
 
-    // Vela T aos 50s (bull)
-    const candlesT = generateCandles(30, 1.0800, "UP");
-    candlesT[candlesT.length - 1].timestamp = t;
-
-    const rep50s = portfolio.evaluate({
-      symbol: "EURUSD",
-      timeframeSeconds: 60,
-      candles: candlesT,
-      isReady: true,
+    analyzer.lifecycle.onEvent((event) => {
+      if (event === "PRE_SIGNAL") {
+        newSignalEvents++;
+      }
     });
 
-    // Confirma sinal CALL
-    assert.equal(rep50s.action, "CALL");
-    assert.equal(rep50s.isNewSignal, true);
-
-    // Agora simula virada de vela T+60 com queda abrupta (que daria PUT se não estivesse protegido)
-    const candlesT60 = [...candlesT];
-    candlesT60.push({
-      timestamp: t + 60,
-      open: candlesT[candlesT.length - 1].close,
-      high: candlesT[candlesT.length - 1].close,
-      low: candlesT[candlesT.length - 1].close - 0.0010,
-      close: candlesT[candlesT.length - 1].close - 0.0008,
-      symbol: "EURUSD",
+    // 1. Aos 50s da vela T, a decisão quantitativa devolve CALL
+    const snap50 = analyzer.tickLifecycle({
+      nowSec: t + 50,
+      decide: () => ({
+        action: "CALL",
+        probability: 0.65,
+        edge: 0.05,
+        ev: 0.12,
+      }),
+      dataOk: true,
     });
 
-    // Ticks de T+60 até T+63
-    let newSignalCount = 0;
+    assert.equal(snap50.current.direction, "CALL", "Esperava direção CALL aos 50s");
+    assert.equal(snap50.current.phase, "PRE_SIGNAL", "Esperava fase PRE_SIGNAL aos 50s");
+    assert.equal(newSignalEvents, 1, "Deve disparar exatamente 1 evento PRE_SIGNAL");
+
+    // 2. Agora simula a virada da vela (T+60 até T+63) onde nova decisão devolveria PUT abrupto
     for (let sec = 0; sec <= 3; sec++) {
-      const rep = portfolio.evaluate({
-        symbol: "EURUSD",
-        timeframeSeconds: 60,
-        candles: candlesT60,
-        isReady: true,
+      const snap = analyzer.tickLifecycle({
+        nowSec: t + 60 + sec,
+        decide: () => ({
+          action: "PUT",
+          probability: 0.70,
+          edge: 0.08,
+          ev: 0.15,
+        }),
+        dataOk: true,
       });
 
-      // O sinal em execução na abertura da nova vela DEVE preservar o CALL qualificado
-      assert.equal(rep.action, "CALL", `No segundo ${sec} da nova vela, sinal inverteu para ${rep.action}`);
-      if (rep.isNewSignal) newSignalCount++;
+      // O trade ativo na transição DEVE preservar o CALL qualificado (zero repaint)
+      assert.equal(snap.trade.direction, "CALL", `No segundo ${sec} da nova vela, sinal inverteu para ${snap.trade.direction}`);
+      assert.ok(
+        snap.trade.phase === "ENTRY_NOW" || snap.trade.phase === "IN_TRADE",
+        `Fase inesperada no segundo ${sec}: ${snap.trade.phase}`
+      );
     }
 
-    assert.equal(newSignalCount, 0, "Não deve disparar novos sinais durante a transição da vela");
+    // Nenhum novo sinal deve ser gerado durante a janela de transição
+    assert.equal(newSignalEvents, 1, "Não deve disparar novos sinais durante a transição da vela");
   }
 );
 

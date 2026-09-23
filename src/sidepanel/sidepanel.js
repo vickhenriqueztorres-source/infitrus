@@ -94,17 +94,14 @@ function updateCountdownUI(timerState) {
   // Guia de execução na janela de fechamento/abertura
   const guide = document.getElementById("signal-guide");
   const guideText = document.getElementById("guide-text");
-  const inDecisionWindow =
-    timerState.remainingSeconds <= 15 ||
-    timerState.phase === "WARNING" ||
-    timerState.phase === "PREPARE" ||
-    timerState.phase === "EXECUTE";
-  const act = inDecisionWindow ? (activeSignalData?.action || activeSignalData?.quantAction) : "WAIT";
+  const vm = createViewModel(activeSignalData || {}, timerState);
+  const act = vm.signal ? vm.signal.direction : "WAIT";
+  const phaseLabel = vm.signal?.phaseLabel || "";
 
   if (guide && guideText) {
-    if (inDecisionWindow && (act === "CALL" || act === "PUT")) {
+    if (vm.signal && (act === "CALL" || act === "PUT")) {
       guide.style.display = "block";
-      if (timerState.phase === "EXECUTE" || timerState.remainingSeconds <= 1) {
+      if (vm.signal.rawPhase === "ENTRY_NOW" || timerState.remainingSeconds <= 1) {
         guide.className = "signal-guide is-execute";
         guideText.innerHTML = `🚀 <strong>ENTRADA CONFIRMADA (${act})</strong>: Abrir operação agora na ABERTURA!`;
       } else if (timerState.remainingSeconds <= 3) {
@@ -112,7 +109,7 @@ function updateCountdownUI(timerState) {
         guideText.innerHTML = `⚠️ <strong>PREPARE O CLIQUE (${act})</strong>: Abertura em <b>${timerState.remainingSeconds}s</b>`;
       } else {
         guide.className = "signal-guide";
-        guideText.innerHTML = `⚠️ <strong>PRÉ-ALERTA DE ${act}</strong>: Entrada na ABERTURA em <b>${timerState.remainingSeconds}s</b>`;
+        guideText.innerHTML = `⚠️ <strong>${phaseLabel || "PRÉ-ALERTA"} (${act})</strong>: Entrada na ABERTURA em <b>${timerState.remainingSeconds}s</b>`;
       }
     } else {
       guide.style.display = "none";
@@ -130,17 +127,10 @@ function renderSignalCard(data, timerState = null) {
   activeSignalData = data;
   const currentTimer = timerState || candleTimer.getState();
   const remainingSec = currentTimer.remainingSeconds;
-  const inDecisionWindow =
-    remainingSec <= 15 ||
-    currentTimer.phase === "WARNING" ||
-    currentTimer.phase === "PREPARE" ||
-    currentTimer.phase === "EXECUTE";
+  const vm = createViewModel(data || {}, currentTimer);
 
-  // Se estivermos nos primeiros 45 segundos da vela (escaneamento),
-  // mantém o card visual em WAIT para eliminar 100% o repainting.
-  const rawAction = data?.action || data?.quantAction || "WAIT";
-  const action = inDecisionWindow ? rawAction : "WAIT";
-  const prob = Number(data?.conservativeProbability || data?.probability || data?.quantProbability || 0.5);
+  const action = vm.signal ? vm.signal.direction : "WAIT";
+  const prob = Number(vm.signal?.probability || data?.conservativeProbability || data?.probability || data?.quantProbability || 0.5);
   const edge = Number(data?.edge ?? 0);
   const qual = Number(data?.quality ?? 0);
   const substrat = data?.subStrategy || data?.strategyName || (action !== "WAIT" ? "Quant M1" : "21 SUBESTRATÉGIAS");
@@ -581,16 +571,11 @@ function renderState(globalData = {}, localTabState = null) {
     renderSignalsHistory(displayData.signalsHistory || cachedState.signalsHistory || []);
 
     // 4. Detecção de novos sinais via polling de storage (caso a mensagem direta falhe)
-    // Alerta sonoro apenas dentro da janela de decisão e UMA única vez por candle
-    const inDecisionWindow =
-      currentTimerState.remainingSeconds <= 15 ||
-      currentTimerState.phase === "WARNING" ||
-      currentTimerState.phase === "PREPARE" ||
-      currentTimerState.phase === "EXECUTE";
-    const curAction = inDecisionWindow ? (displayData.action || displayData.quantAction) : "WAIT";
+    const vm = createViewModel(displayData, displayData.candleTimer || cachedState.candleTimer || {}, { now: Date.now() });
+    const curAction = vm.signal ? vm.signal.direction : "WAIT";
     const candleTs = displayData.candleTimestamp || Math.floor(currentTimerState.epoch / 60) * 60;
 
-    if (inDecisionWindow && (curAction === "CALL" || curAction === "PUT")) {
+    if (vm.signal && (curAction === "CALL" || curAction === "PUT")) {
       if (lastAlertedCandleTs !== candleTs) {
         lastAlertedCandleTs = candleTs;
         if (curAction === "CALL") audioAlertManager.playCallAlert();
@@ -599,7 +584,6 @@ function renderState(globalData = {}, localTabState = null) {
     }
 
     // 5. Renderização dos elementos básicos do Status Card
-    const vm = createViewModel(displayData, displayData.candleTimer || cachedState.candleTimer || {}, { now: Date.now() });
     const copy = {
       CONECTANDO: "Activo · Buscando la transmisión…",
       CALIBRANDO: "Activo · Calibrando datos…",

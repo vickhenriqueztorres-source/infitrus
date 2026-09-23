@@ -59,43 +59,52 @@ export class SignalAuditor {
    * Grava um novo sinal disparado no histórico.
    *
    * @param {Object} signal
+   * @param {string} [signal.id]
    * @param {string} signal.action - 'CALL' ou 'PUT'
    * @param {string} signal.symbol
-   * @param {number} signal.timeframeSeconds
-   * @param {number} signal.candleTimestamp
-   * @param {number} signal.entryPrice
-   * @param {number} signal.probability
-   * @param {number} signal.ev
-   * @param {number} signal.payout
-   * @param {string} signal.label
-   * @param {boolean} signal.isConfluence
+   * @param {number} [signal.timeframeSeconds=60]
+   * @param {number} [signal.candleTimestamp]
+   * @param {number} [signal.timestamp]
+   * @param {number} [signal.targetTimestamp]
+   * @param {number} [signal.entryPrice]
+   * @param {number} [signal.probability]
+   * @param {number} [signal.ev]
+   * @param {number} [signal.payout]
+   * @param {string} [signal.label]
+   * @param {boolean} [signal.isConfluence]
    * @param {Object} [signal.confluence]
    * @param {string} [signal.primaryStrategyName]
+   * @param {string} [signal.subStrategy]
+   * @param {string} [signal.correlationGroup]
    * @param {Array<string>} [signal.reasons]
    * @returns {Object|null}
    */
   recordSignal(signal) {
-    if (!signal || signal.action === "WAIT" || !signal.candleTimestamp) {
+    if (!signal || signal.action === "WAIT") {
       return null;
     }
 
-    const id = `sig_${signal.symbol}_${signal.timeframeSeconds}_${signal.candleTimestamp}`;
+    const candleTs = signal.candleTimestamp || signal.timestamp;
+    if (!candleTs) return null;
 
-    // Evita duplicata ou sinais conflitantes para a mesma vela
-    if (this.signals.some((s) => s.id === id || (s.symbol === signal.symbol && s.timestamp === signal.candleTimestamp))) {
+    const tf = signal.timeframeSeconds || 60;
+    const id = signal.id || `sig_${signal.symbol}_${tf}_${candleTs}`;
+    const targetTimestamp = signal.targetTimestamp || (candleTs + tf);
+
+    // Evita duplicata por id ou candle do mesmo símbolo
+    if (this.signals.some((s) => s.id === id || (s.symbol === signal.symbol && s.timestamp === candleTs))) {
       return null;
     }
 
-    const dateObj = new Date(signal.candleTimestamp * 1000);
+    const dateObj = new Date(candleTs * 1000);
     const timeFormatted = dateObj.toTimeString().split(" ")[0];
-    const targetTimestamp = signal.candleTimestamp + (signal.timeframeSeconds || 60);
 
     const record = {
       id,
-      timestamp: signal.candleTimestamp,
+      timestamp: candleTs,
       timeFormatted,
       symbol: signal.symbol,
-      timeframeSeconds: signal.timeframeSeconds,
+      timeframeSeconds: tf,
       direction: signal.action,
       label: signal.label,
       isConfluence: Boolean(signal.isConfluence),
@@ -114,7 +123,7 @@ export class SignalAuditor {
       quality: signal.quality || 0,
       payout: signal.payout || 0.80,
       targetTimestamp,
-      status: "PENDING", // PENDING -> SETTLED
+      status: "PENDING", // PENDING -> SETTLED / CANCELLED
       closePrice: null,
       result: null, // WIN, LOSS, DOJI
       pnlUnits: null,
@@ -133,17 +142,76 @@ export class SignalAuditor {
   }
 
   /**
-   * Audita sinais pendentes quando uma nova vela fechada chega.
+   * Liquida formalmente um sinal com resultado observado.
    *
-   * @param {Array<{ timestamp: number, open: number, high: number, low: number, close: number, symbol?: string }>} closedCandles
-   * @returns {Array<Object>} Lista de sinais que acabaram de ser liquidados nesta checagem
+   * @param {string} id
+   * @param {Object} outcome
+   * @param {string} outcome.result - 'WIN', 'LOSS', 'DOJI'
+   * @param {number} [outcome.entryPrice]
+   * @param {number} [outcome.closePrice]
+   * @returns {Object|null}
    */
-  auditPendingSignals(closedCandles = []) {
+  settle(id, { result, entryPrice, closePrice } = {}) {
+    const sig = this.signals.find((s) => s.id === id);
+    if (!sig || sig.status !== "PENDING") return null;
+
+    sig.status = "SETTLED";
+    if (entryPrice != null) sig.entryPrice = entryPrice;
+    if (closePrice != null) sig.closePrice = closePrice;
+    sig.result = result;
+
+    if (result === "WIN") {
+      sig.pnlUnits = Number((sig.payout || 0.80).toFixed(2));
+    } else if (result === "LOSS") {
+      sig.pnlUnits = -1.0;
+    } else {
+      sig.pnlUnits = 0.0;
+    }
+
+    sig.settledAt = Date.now();
+    this._recomputeStats();
+    this._persistStorage();
+    return sig;
+  }
+
+  /**
+   * Cancela um sinal (ex: feed instável ou cancelamento antes da entrada).
+   * Não entra nas estatísticas do placar.
+   *
+   * @param {string} id
+   * @param {string} [reason]
+   * @returns {Object|null}
+   */
+  cancel(id, reason = null) {
+    const sig = this.signals.find((s) => s.id === id);
+    if (!sig) return null;
+
+    sig.status = "CANCELLED";
+    sig.reason = reason;
+    sig.cancelledAt = Date.now();
+    this._recomputeStats();
+    this._persistStorage();
+    return sig;
+  }
+
+  /**
+   * Fallback de recuperação para auditoria de sinais pendentes (ex: reconexão).
+   * Usa APENAS velas fechadas (closed !== false).
+   *
+   * @param {Array<{ timestamp: number, open?: number, high?: number, low?: number, close: number, symbol?: string, closed?: boolean }>} closedCandles
+   * @param {number} [nowSec=null]
+   * @returns {Array<Object>} Lista de sinais recém-liquidados
+   */
+  auditPendingSignals(closedCandles = [], nowSec = null) {
     if (!closedCandles || closedCandles.length === 0) return [];
 
+    const currentTimeSec = nowSec ?? (Date.now() / 1000);
     const newlySettled = [];
     const candleMap = new Map();
+
     for (const c of closedCandles) {
+      if (c.closed === false) continue; // Descarta estritamente velas em formação
+
       if (c.symbol) {
         candleMap.set(`${c.symbol.toUpperCase()}_${c.timestamp}`, c);
       }
@@ -154,17 +222,17 @@ export class SignalAuditor {
       if (sig.status === "PENDING") {
         const symKey = `${(sig.symbol || "").toUpperCase()}_${sig.targetTimestamp}`;
         const targetCandle = candleMap.get(symKey) || candleMap.get(String(sig.targetTimestamp));
+
         if (targetCandle && (!targetCandle.symbol || targetCandle.symbol.toUpperCase() === (sig.symbol || "").toUpperCase())) {
-          // A vela alvo de liquidação fechou!
+          const entryPrice = targetCandle.open ?? sig.entryPrice;
           const closePrice = targetCandle.close;
-          const entryPrice = sig.entryPrice;
           let result = "LOSS";
           let pnlUnits = -1.0;
 
           if (closePrice > entryPrice) {
             if (sig.direction === "CALL") {
               result = "WIN";
-              pnlUnits = Number(sig.payout.toFixed(2));
+              pnlUnits = Number((sig.payout || 0.80).toFixed(2));
             } else {
               result = "LOSS";
               pnlUnits = -1.0;
@@ -172,7 +240,7 @@ export class SignalAuditor {
           } else if (closePrice < entryPrice) {
             if (sig.direction === "PUT") {
               result = "WIN";
-              pnlUnits = Number(sig.payout.toFixed(2));
+              pnlUnits = Number((sig.payout || 0.80).toFixed(2));
             } else {
               result = "LOSS";
               pnlUnits = -1.0;
@@ -183,6 +251,7 @@ export class SignalAuditor {
           }
 
           sig.status = "SETTLED";
+          sig.entryPrice = entryPrice;
           sig.closePrice = closePrice;
           sig.result = result;
           sig.pnlUnits = pnlUnits;
@@ -202,11 +271,12 @@ export class SignalAuditor {
   }
 
   /**
-   * Recalcula todas as estatísticas acumuladas
+   * Recalcula todas as estatísticas acumuladas ignorando sinais CANCELLED.
    * @private
    */
   _recomputeStats() {
-    let total = this.signals.length;
+    const activeSignals = this.signals.filter((s) => s.status !== "CANCELLED");
+    let total = activeSignals.length;
     let settled = 0;
     let wins = 0;
     let losses = 0;
@@ -217,7 +287,7 @@ export class SignalAuditor {
     const bySubStrategy = {};
     const byConfluence = {};
 
-    for (const s of this.signals) {
+    for (const s of activeSignals) {
       if (s.status === "SETTLED") {
         settled++;
         if (s.result === "WIN") wins++;
