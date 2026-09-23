@@ -39,10 +39,16 @@ export function validateBridgeMessage(event, expectedSessionId = null) {
     return { valid: false, reason: "Origem da fonte não pertence à janela local" };
   }
 
-  // 2. Validação de domínio de origem
-  const origin = event.origin || (typeof window !== "undefined" ? window.location.origin : "");
-  if (!ALLOWED_ORIGINS.has(origin)) {
-    return { valid: false, reason: `Domínio de origem não autorizado: ${origin}` };
+  // 2. Validação de domínio de origem: SOMENTE location.origin da janela (I-11) ou ALLOWED_ORIGINS em testes
+  const localOrigin = typeof window !== "undefined" && window.location?.origin ? window.location.origin : null;
+  if (localOrigin) {
+    if (event.origin !== localOrigin) {
+      return { valid: false, reason: `Domínio de origem não autorizado: ${event.origin}` };
+    }
+  } else {
+    if (!ALLOWED_ORIGINS.has(event.origin)) {
+      return { valid: false, reason: `Domínio de origem não autorizado: ${event.origin}` };
+    }
   }
 
   const data = event.data;
@@ -51,7 +57,11 @@ export function validateBridgeMessage(event, expectedSessionId = null) {
   }
 
   // 3. Validação de tipo de evento esperado
-  if (data.type !== "ORACLE_MAIN_MARKET_EVENT" && data.type !== "ORACLE_SOCKET_STATUS") {
+  if (
+    data.type !== "ORACLE_MAIN_MARKET_EVENT" &&
+    data.type !== "ORACLE_SOCKET_STATUS" &&
+    data.type !== "ORACLE_CHANNEL"
+  ) {
     return { valid: false, reason: `Tipo de evento desconhecido: ${data.type}` };
   }
 
@@ -76,12 +86,15 @@ export function validateBridgeMessage(event, expectedSessionId = null) {
   return { valid: true, data };
 }
 
+let activeSessionId = null;
+
 /**
  * Inicializa o listener seguro da Bridge no content script isolado.
  *
  * @param {Object} options
- * @param {Function} options.onMarketEvent - Callback({ type: "MARKET_EVENT", sessionId, origin, receivedAt, payload, sourceType })
+ * @param {Function} options.onMarketEvent - Callback({ type: "MARKET_EVENT", sessionId, origin, receivedAt, payload, meta, sourceType })
  * @param {Function} [options.onSocketStatus] - Callback({ type: "SOCKET_STATUS", status, url })
+ * @param {Function} [options.onChannel] - Callback({ type: "ORACLE_CHANNEL", sessionId, action, pair, tf, at })
  */
 export function initBridgeListener(options = {}) {
   if (typeof window === "undefined") return;
@@ -90,17 +103,25 @@ export function initBridgeListener(options = {}) {
 
   window.addEventListener("message", (event) => {
     // Filtro rápido de tipo
-    if (!event.data || (event.data.type !== "ORACLE_MAIN_MARKET_EVENT" && event.data.type !== "ORACLE_SOCKET_STATUS")) {
+    if (
+      !event.data ||
+      (event.data.type !== "ORACLE_MAIN_MARKET_EVENT" &&
+        event.data.type !== "ORACLE_SOCKET_STATUS" &&
+        event.data.type !== "ORACLE_CHANNEL")
+    ) {
       return;
     }
 
-    const check = validateBridgeMessage(event);
+    const check = validateBridgeMessage(event, activeSessionId);
     if (!check.valid) {
       // Rejeita silenciosamente mensagens não conformes
       return;
     }
 
     const { data } = check;
+    if (!activeSessionId && data.sessionId) {
+      activeSessionId = data.sessionId;
+    }
 
     if (data.type === "ORACLE_MAIN_MARKET_EVENT" && typeof options.onMarketEvent === "function") {
       options.onMarketEvent({
@@ -110,6 +131,7 @@ export function initBridgeListener(options = {}) {
         receivedAt: data.receivedAt || Date.now(),
         sourceType: data.sourceType || "websocket",
         url: data.url || "",
+        meta: data.meta || null,
         payload: data.payload,
       });
     } else if (data.type === "ORACLE_SOCKET_STATUS" && typeof options.onSocketStatus === "function") {
@@ -117,6 +139,15 @@ export function initBridgeListener(options = {}) {
         type: "SOCKET_STATUS",
         status: data.status,
         url: data.url,
+      });
+    } else if (data.type === "ORACLE_CHANNEL" && typeof options.onChannel === "function") {
+      options.onChannel({
+        type: "ORACLE_CHANNEL",
+        sessionId: data.sessionId,
+        action: data.action,
+        pair: data.pair,
+        tf: data.tf,
+        at: data.at,
       });
     }
   });

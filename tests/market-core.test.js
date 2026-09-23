@@ -96,6 +96,28 @@ test("2. Deve normalizar array de barras históricas REST da B2Trading", () => {
   assert.equal(candles[1].closed, true);
 });
 
+test("2b. Um histórico com ?pair=AUDCAD nunca pode ser gravado como EURUSD", () => {
+  const rawHistoryResponse = {
+    bars: [
+      {
+        time: 1727010120000,
+        open: 0.912,
+        high: 0.915,
+        low: 0.911,
+        close: 0.914,
+        volume: 50,
+      },
+    ],
+  };
+
+  // Par extraído da URL é AUDCAD, mesmo que o contexto padrão tentasse passar EURUSD
+  const candles = normalizeHistoryBars(rawHistoryResponse, "AUDCAD", 60, { symbol: "EURUSD" });
+
+  assert.equal(candles.length, 1);
+  assert.equal(candles[0].symbol, "AUDCAD", "O par da URL deve prevalecer e nunca ser gravado como EURUSD");
+  assert.notEqual(candles[0].symbol, "EURUSD");
+});
+
 test("3. Conversão obrigatória de milissegundos para segundos e alinhamento", () => {
   // Timestamp em milissegundos
   const msTimestamp = 1727010195123;

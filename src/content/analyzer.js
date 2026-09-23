@@ -22,6 +22,7 @@ import { DataQualityTracker, MarketState } from "../market/data-quality.js";
 import { QuantPortfolio } from "../strategy/quant-portfolio.js";
 import { PortfolioRegistry } from "../strategy/portfolio-registry.js";
 import { SignalLifecycle, Phase } from "../strategy/signal-lifecycle.js";
+import { ActiveChannel } from "../market/active-channel.js";
 import { LIFECYCLE } from "../strategy/lifecycle-config.js";
 import { signalAuditor } from "../strategy/signal-auditor.js";
 import { intraminuteTracker } from "../market/intraminute-tracker.js";
@@ -30,7 +31,6 @@ import { candleTimer } from "../utils/candle-timer.js";
 import { marketClock } from "../utils/market-clock.js";
 import { logger } from "../utils/logger.js";
 import { initBridgeListener } from "./bridge.js";
-import { DiagnosticPanel } from "./panel.js";
 
 export class MarketAnalyzer {
   constructor() {
@@ -40,6 +40,7 @@ export class MarketAnalyzer {
     this.lastPrices = new Map();
     this._lastLoggedPrices = new Map();
     this.store = new CandleStore({ maxCandlesPerSeries: 500 });
+    this.activeChannel = new ActiveChannel();
 
     if (typeof window !== "undefined") {
       candleTimer.start();
@@ -55,6 +56,23 @@ export class MarketAnalyzer {
     this.lastDecideAt = 0;
     this.lastCachedDecision = null;
     this.currentLifecycleSnapshot = null;
+    this.panel = null; // Painel oculto removido do fluxo de execução padrão (I-08)
+
+    // Ao trocar de ativo: cancela par antigo, limpa do activeSymbols e atualiza contexto (I-03, I-10)
+    this.activeChannel.onChange((next, prev) => {
+      if (prev && prev.pair && (!next || next.pair !== prev.pair)) {
+        this.lifecycle.cancelPair(prev.pair, "ASSET_CHANGED");
+        this.activeSymbols.delete(prev.pair);
+      }
+      if (next && next.pair) {
+        this.currentSymbol = next.pair;
+        this.timeframeSeconds = next.tf || 60;
+        this.activeSymbols.clear();
+        this.activeSymbols.add(next.pair);
+        logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
+      }
+      this.updatePanelDisplay();
+    });
 
     // Conexão dos Eventos do SignalLifecycle (Único ponto com efeitos colaterais de sinal)
     this.lifecycle.onEvent((event, lc) => {
@@ -143,7 +161,6 @@ export class MarketAnalyzer {
       reasons: ["Inicializando observador quant"],
       isNewSignal: false,
     };
-    this.panel = typeof window !== "undefined" && window === window.top ? new DiagnosticPanel() : null;
 
     this.socketStatus = "desconectado";
     this.lastPrice = "---";
@@ -151,8 +168,6 @@ export class MarketAnalyzer {
     this._lastState = null;
     this._lastSigKey = null;
 
-    this.hasChildFrameData = false;
-    this.lastChildFrameSyncAt = 0;
     this.tabId = null;
     this.windowId = null;
 
@@ -173,23 +188,14 @@ export class MarketAnalyzer {
       } catch (_) {}
     }
 
-    // 1. Escuta eventos da Bridge
+    // 1. Escuta eventos da Bridge (com canal)
     initBridgeListener({
       onMarketEvent: (event) => this.handleMarketEvent(event),
       onSocketStatus: (info) => this.handleSocketStatus(info),
+      onChannel: (ch) => this.activeChannel.onChannel(ch),
     });
 
-    // 2. Se for o frame filho (gráfico), escuta respostas e também encaminha dados consolidados ao topo
-    if (typeof window !== "undefined" && window !== window.top) {
-      this.setupChildToParentBridge();
-    }
-
-    // 3. Se for a janela principal (top), escuta atualizações de frames filhos
-    if (typeof window !== "undefined" && window === window.top) {
-      this.setupParentFrameReceiver();
-    }
-
-    // 4. Verificação periódica de Heartbeat / Stale feed a cada 2.5s e loop contínuo do SignalLifecycle
+    // 2. Verificação periódica de Heartbeat / Stale feed a cada 2.5s e loop contínuo do SignalLifecycle
     if (typeof window !== "undefined") {
       setInterval(() => {
         this.quality.checkStale(this.currentSymbol, this.timeframeSeconds);
@@ -201,7 +207,19 @@ export class MarketAnalyzer {
       }, 250);
     }
 
-    logger.info("SISTEMA", `Analyzer ativo em ${typeof window !== "undefined" && window === window.top ? "janela principal" : "iframe gráfico"}`);
+    // 3. Listener seguro para alteração de payout via Side Panel (I-05)
+    if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener((msg, sender) => {
+        if (sender && sender.id !== chrome.runtime.id) return;
+        if (msg && msg.type === "ORACLE_SET_PAYOUT" && msg.payout) {
+          this.payout = msg.payout;
+          this.registry.setGlobalPayout(msg.payout);
+          this.updatePanelDisplay();
+        }
+      });
+    }
+
+    logger.info("SISTEMA", `Analyzer ativo em iframe gráfico de cálculo`);
   }
 
   /**
@@ -214,11 +232,12 @@ export class MarketAnalyzer {
    * @returns {Object} Snapshot do lifecycle
    */
   tickLifecycle({ nowSec = null, decide = null, dataOk = null } = {}) {
-    const pair = this.currentSymbol;
-    const tf = this.timeframeSeconds;
+    const active = this.activeChannel.get();
+    const pair = active?.pair || this.currentSymbol;
+    const tf = active?.tf || this.timeframeSeconds;
 
     if (tf !== LIFECYCLE.SUPPORTED_TF_SEC) {
-      this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED" };
+      this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair, tf };
       return this.currentLifecycleSnapshot;
     }
 
@@ -279,20 +298,28 @@ export class MarketAnalyzer {
     if (!event || !event.payload) return;
 
     if (event.sourceType === "history") {
-      this.processHistoryPayload(event.payload);
+      if (event.meta?.pair) {
+        this.activeChannel.onHistory(event.meta.pair, event.meta.tf || 60);
+      }
+      this.processHistoryPayload(event.payload, event.meta);
     } else {
       this.processRealtimePayload(event.payload);
     }
   }
 
-  processHistoryPayload(payload) {
-    const bars = normalizeHistoryBars(payload, this.currentSymbol, this.timeframeSeconds);
+  processHistoryPayload(payload, meta = null) {
+    const active = this.activeChannel.get();
+    const targetPair = meta?.pair || active?.pair || this.currentSymbol;
+    const targetTf = meta?.tf || active?.tf || this.timeframeSeconds;
+
+    const bars = normalizeHistoryBars(payload, targetPair, targetTf);
     if (!bars || bars.length === 0) return;
 
-    // Se o payload indicar outro ativo, atualiza
     const detectedSym = bars[0].symbol;
     if (detectedSym && detectedSym !== this.currentSymbol) {
       this.currentSymbol = detectedSym;
+      this.activeSymbols.clear();
+      this.activeSymbols.add(detectedSym);
       logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
     }
 
@@ -306,32 +333,31 @@ export class MarketAnalyzer {
 
     logger.info("HISTÓRICO", `${bars.length} candles carregados para ${this.currentSymbol} (${this.timeframeSeconds}s)`);
     this.updatePanelDisplay();
-    this.notifyParentIfInFrame();
   }
 
   processRealtimePayload(payload) {
-    const rawSym = payload.pair || payload.symbol;
-    const incomingSym = (rawSym && typeof rawSym === "string") ? rawSym.trim().toUpperCase() : this.currentSymbol;
-    if (incomingSym) {
-      const isNew = !this.activeSymbols.has(incomingSym);
-      this.activeSymbols.add(incomingSym);
-      if (isNew) {
-        logger.info("FEED", `Ativo registrado no feed: ${incomingSym}`);
-        if (!this.currentSymbol || this.currentSymbol === "EURUSD") {
-          this.currentSymbol = incomingSym;
-          logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
-        }
-      }
-      if (this.quality.getState(incomingSym, this.timeframeSeconds) === MarketState.BOOTING) {
-        const existingCount = this.store.getCandles(incomingSym, this.timeframeSeconds, 150).length;
-        if (existingCount >= this.quality.minHistoryBars) {
-          this.quality.onHistoryLoaded(incomingSym, this.timeframeSeconds, existingCount);
-          this.quality.onRealtimeUpdate(incomingSym, this.timeframeSeconds, { status: "UPDATED" });
-        } else {
-          this.quality.onStartHistorySync(incomingSym, this.timeframeSeconds);
-        }
-      }
+    const active = this.activeChannel.get();
+    const activePair = active?.pair || this.currentSymbol;
+    const activeTf = active?.tf || this.timeframeSeconds;
+
+    // Se o timeframe ativo não for M1 (60s), não gera sinal
+    if (activeTf !== LIFECYCLE.SUPPORTED_TF_SEC) {
+      this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair: activePair, tf: activeTf };
+      return;
     }
+
+    const rawSym = payload.pair || payload.symbol;
+    const incomingSym = (rawSym && typeof rawSym === "string") ? rawSym.trim().toUpperCase() : activePair;
+
+    // Descarta ticks de outros ativos quando já há um ativo ativo definido (I-03, I-10)
+    if (activePair && incomingSym && incomingSym !== activePair) {
+      return;
+    }
+
+    const sym = incomingSym || activePair;
+    this.currentSymbol = sym;
+    this.activeSymbols.clear();
+    this.activeSymbols.add(sym);
 
     const candles = normalizeWebSocketPayload(payload, this.timeframeSeconds, { symbol: incomingSym });
     if (!candles || candles.length === 0) return;
@@ -414,19 +440,9 @@ export class MarketAnalyzer {
     }
 
     this.updatePanelDisplay();
-    this.notifyParentIfInFrame();
   }
 
   updatePanelDisplay() {
-    if (
-      typeof window !== "undefined" &&
-      window === window.top &&
-      this.hasChildFrameData &&
-      Date.now() - this.lastChildFrameSyncAt < 10000
-    ) {
-      return;
-    }
-
     const symbolsMap = {};
     const symbolsList = Array.from(this.activeSymbols.size > 0 ? this.activeSymbols : [this.currentSymbol]);
 
@@ -629,167 +645,32 @@ export class MarketAnalyzer {
     } catch (e) {}
   }
 
-  notifyParentIfInFrame() {
-    if (typeof window === "undefined" || window === window.top) return;
-
-    const report = this.quality.getReport(this.currentSymbol, this.timeframeSeconds);
-    const lastCandle = this.store.getLast(this.currentSymbol, this.timeframeSeconds);
-    const candlesCount = this.store.getCandles(this.currentSymbol, this.timeframeSeconds, 500).length;
-
-    try {
-      window.parent.postMessage(
-        {
-          type: "ORACLE_INTERNAL_FRAME_SYNC",
-          data: {
-            symbol: this.currentSymbol,
-            timeframeSeconds: this.timeframeSeconds,
-            state: report.state,
-            wsStatus: this.socketStatus,
-            lastPrice: this.lastPrice,
-            lastTimestamp: lastCandle?.timestamp,
-            historyCount: candlesCount,
-            gapCount: report.gapCount,
-            lifecycle: this.currentLifecycleSnapshot || this.lifecycle?.snapshot(this.currentSymbol, this.timeframeSeconds, marketClock.nowSec()),
-            // Portfólio das 5 Estratégias
-            quantAction: this.quantReport?.action || "WAIT",
-            quantLabel: this.quantReport?.label || "AGUARDAR",
-            quantProbability: this.quantReport?.probability || 0.50,
-            quantEV: this.quantReport?.ev || 0,
-            isConfluence: this.quantReport?.isConfluence || false,
-            confluence: this.quantReport?.confluence || null,
-            isDivergent: this.quantReport?.isDivergent || false,
-            strategiesResults: this.quantReport?.strategiesResults || [],
-            quantReasons: this.quantReport?.reasons || [],
-            payout: this.payout || 0.80,
-            signalsHistory: this.signalAuditor.getSignals().slice(0, 20),
-            stats: this.signalAuditor.getStats(),
-            // Legado
-            signal: this.quantReport?.action !== "WAIT" ? this.quantReport?.action : this.currentSignal?.action || "WAIT",
-            signalLabel: this.quantReport?.action !== "WAIT" ? this.quantReport?.label : this.currentSignal?.label || "AGUARDAR",
-            signalReasons: this.quantReport?.action !== "WAIT" ? this.quantReport?.reasons : this.currentSignal?.reasons || [],
-            indicators: this.currentSignal?.indicators || {},
-          },
-        },
-        "*"
-      );
-    } catch (e) {}
-  }
-
   get quantPortfolio() {
     return this.registry.get(this.currentSymbol);
   }
-
-  setupChildToParentBridge() {
-    // Encaminha logs emitidos no iframe do gráfico para a janela principal
-    logger.subscribe((entry) => {
-      if (!entry) return;
-      try {
-        window.parent.postMessage(
-          {
-            type: "ORACLE_INTERNAL_LOG_SYNC",
-            entry,
-          },
-          "*"
-        );
-      } catch (e) {}
-    });
-  }
-
-  setupParentFrameReceiver() {
-    window.addEventListener("message", (event) => {
-      if (!event.data) return;
-
-      if (event.data.type === "ORACLE_INTERNAL_LOG_SYNC") {
-        const entry = event.data.entry;
-        if (entry && entry.tag && entry.message) {
-          logger.add(entry.tag, entry.message, entry.level || "info", {
-            id: entry.id,
-            symbol: entry.symbol || this.currentSymbol,
-            tabId: entry.tabId || this.tabId,
-            skipConsole: true,
-          });
-        }
-        return;
-      }
-
-      if (event.data.type === "ORACLE_SET_PAYOUT" && event.data.payout) {
-        this.payout = event.data.payout;
-        this.registry.setGlobalPayout(event.data.payout);
-        this.updatePanelDisplay();
-        return;
-      }
-
-      if (event.data.type !== "ORACLE_INTERNAL_FRAME_SYNC") return;
-      const d = event.data.data;
-      if (!d) return;
-
-      this.hasChildFrameData = true;
-      this.lastChildFrameSyncAt = Date.now();
-      if (d.symbol && d.symbol !== this.currentSymbol) {
-        this.currentSymbol = d.symbol;
-      }
-      if (d.lastPrice && d.lastPrice !== "---") {
-        this.lastPrice = d.lastPrice;
-      }
-
-      let lastTimeStr = "--:--:--";
-      if (d.lastTimestamp) {
-        const dateObj = new Date(d.lastTimestamp * 1000);
-        lastTimeStr = dateObj.toTimeString().split(" ")[0];
-      }
-
-      const stateObj = {
-        frameStatus: "iframe conectado",
-        wsStatus: d.wsStatus || "conectado",
-        symbol: d.symbol || this.currentSymbol,
-        timeframe: `${(d.timeframeSeconds || 60) / 60} minuto(s)`,
-        historyCount: d.historyCount || 0,
-        lastCandleTime: lastTimeStr,
-        lastPrice: d.lastPrice || "---",
-        gaps: d.gapCount || 0,
-        state: d.state || "SYNCING",
-        // Portfólio das 5 Estratégias
-        quantAction: d.quantAction || "WAIT",
-        quantLabel: d.quantLabel || "AGUARDAR",
-        quantProbability: d.quantProbability || 0.50,
-        quantEV: d.quantEV || 0,
-        isConfluence: d.isConfluence || false,
-        confluence: d.confluence || null,
-        isDivergent: d.isDivergent || false,
-        strategiesResults: d.strategiesResults || [],
-        quantReasons: d.quantReasons || [],
-        payout: d.payout || 0.80,
-        // Histórico de Sinais Gravados e Auditoria
-        signalsHistory: d.signalsHistory || [],
-        stats: d.stats || {},
-        // Legado
-        signal: d.signal || "WAIT",
-        signalLabel: d.signalLabel || "AGUARDAR",
-        signalReasons: d.signalReasons || [],
-        indicators: d.indicators || {},
-        updatedAt: Date.now(),
-      };
-
-      if (this.panel) {
-        this.panel.update(stateObj);
-      }
-
-      this.saveMarketStateToStorage(stateObj);
-    });
-
-    if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
-      chrome.runtime.onMessage.addListener((msg) => {
-        if (msg && msg.type === "ORACLE_SET_PAYOUT" && msg.payout) {
-          this.payout = msg.payout;
-          this.registry.setGlobalPayout(msg.payout);
-          this.updatePanelDisplay();
-        }
-      });
-    }
-  }
 }
 
-// Inicialização automática do Analyzer no content script
+export const COMPUTE_HOSTS = ["chart.b2trading.io"];
+
+export function isComputeFrame(hostname = "") {
+  const host = hostname || (typeof location !== "undefined" ? location.hostname : "");
+  return COMPUTE_HOSTS.includes(host);
+}
+
+// Inicialização automática do Analyzer no content script (apenas no iframe do gráfico)
 if (typeof window !== "undefined") {
-  window.__oracleAnalyzer = new MarketAnalyzer();
+  const host = window.location.hostname;
+  if (isComputeFrame(host)) {
+    window.__oracleAnalyzer = new MarketAnalyzer();
+  } else {
+    let warned = false;
+    initBridgeListener({
+      onMarketEvent: (event) => {
+        if (!warned && event?.sourceType === "websocket") {
+          warned = true;
+          logger.warn("SISTEMA", `WS de mercado em frame não-cálculo: ${host}`);
+        }
+      },
+    });
+  }
 }

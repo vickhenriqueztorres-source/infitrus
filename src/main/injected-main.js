@@ -69,9 +69,10 @@
           receivedAt: eventData.receivedAt || receivedAt,
           sourceType,
           url: eventData.url,
+          meta: eventData.meta || null,
           payload: eventData.payload,
         },
-        "*"
+        window.location.origin
       );
     } catch (err) {}
   }
@@ -79,6 +80,30 @@
   // --- OBSERVADOR PASSIVO DE WEBSOCKET ---
   if (typeof window.WebSocket === "function") {
     const OriginalWebSocket = window.WebSocket;
+
+    const originalSend = OriginalWebSocket.prototype.send;
+    OriginalWebSocket.prototype.send = function (data) {
+      try {
+        if (typeof data === "string" && data.includes("channel")) {
+          const m = JSON.parse(data);
+          const ch = /^([A-Z0-9_]+)-M(\d+)$/i.exec(m?.channel || "");
+          if (ch && (m.action === "subscribe" || m.action === "unsubscribe")) {
+            window.postMessage(
+              {
+                type: "ORACLE_CHANNEL",
+                sessionId,
+                action: m.action,
+                pair: ch[1].toUpperCase(),
+                tf: Number(ch[2]) * 60,
+                at: Date.now(),
+              },
+              window.location.origin
+            );
+          }
+        }
+      } catch (_) {}
+      return originalSend.apply(this, arguments);
+    };
 
     function PatchedWebSocket(url, protocols) {
       const ws = protocols !== undefined ? new OriginalWebSocket(url, protocols) : new OriginalWebSocket(url);
@@ -208,6 +233,21 @@
   const HISTORY_KEYWORDS = ["/api/market/history", "/api/market/latest", "/bars", "/history"];
   const MAX_PAYLOAD_SIZE = 500 * 1024;
 
+  function parseHistoryUrlMeta(rawUrl) {
+    try {
+      const urlObj = new URL(rawUrl, window.location.href);
+      const pair = urlObj.searchParams.get("pair") || urlObj.searchParams.get("symbol") || null;
+      const resolution = urlObj.searchParams.get("resolution") || urlObj.searchParams.get("tf") || null;
+      const tf = resolution ? Number(resolution) * 60 : null;
+      return {
+        pair: pair ? pair.toUpperCase() : null,
+        tf: Number.isFinite(tf) ? tf : null,
+      };
+    } catch (_) {
+      return { pair: null, tf: null };
+    }
+  }
+
   function handleHistoryText(rawUrl, text) {
     if (!text || text.length > MAX_PAYLOAD_SIZE) return;
     try {
@@ -218,10 +258,12 @@
         (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === "object");
       if (!hasBars) return;
 
+      const meta = parseHistoryUrlMeta(rawUrl);
       const { sanitized } = sanitizeText(JSON.stringify(parsed));
       dispatchToBridge("history", {
         url: sanitizeUrl(rawUrl),
         payload: JSON.parse(sanitized),
+        meta,
         receivedAt: Date.now(),
       });
     } catch (e) {}

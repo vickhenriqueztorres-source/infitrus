@@ -158,10 +158,15 @@ export function normalizeWebSocketPayload(payload, timeframeSeconds = 60, option
  * @param {Object} [options={}]
  * @returns {Candle[]} Lista de velas históricas normalizadas (ordenadas crescentemente)
  */
-export function normalizeHistoryBars(rawInput, symbol, timeframeSeconds = 60, options = {}) {
+export function normalizeHistoryBars(rawInput, pairFromUrl, tfFromUrl = 60, options = {}) {
   if (!rawInput) return [];
 
-  const sym = String(symbol || rawInput.pair || rawInput.symbol || "").trim().toUpperCase();
+  // Precedência estrita: rawInput.pair -> parâmetro do histórico vindo da URL -> parâmetro explícito
+  const inputPair = rawInput.pair || rawInput.symbol;
+  const urlPair = pairFromUrl;
+  const explicitPair = options.symbol || options.pair;
+  const sym = String(inputPair || urlPair || explicitPair || "").trim().toUpperCase();
+  const tf = Number(rawInput.tf || (rawInput.resolution ? Number(rawInput.resolution) * 60 : null) || tfFromUrl || 60);
   const now = options.receivedAt || Date.now();
 
   let rawList = [];
@@ -186,13 +191,13 @@ export function normalizeHistoryBars(rawInput, symbol, timeframeSeconds = 60, op
       candle = _buildCandleFromData(
         { time: t, open: o, high: h, low: l, close: c, volume: v },
         sym,
-        timeframeSeconds,
+        tf,
         "history",
         true,
         now
       );
     } else if (typeof item === "object") {
-      candle = _buildCandleFromData(item, sym, timeframeSeconds, "history", true, now);
+      candle = _buildCandleFromData(item, sym, tf, "history", true, now);
     }
 
     if (candle) {
