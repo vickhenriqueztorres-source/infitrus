@@ -259,6 +259,10 @@ export class FeatureVectorBuilder {
       ...resPos.rawFeatures,
     };
 
+    const resInteractions = this.familyInteractions.evaluate(allRawFeatures);
+    Object.assign(allSignals, resInteractions.signals);
+    Object.assign(allRawFeatures, resInteractions.rawFeatures);
+
     // 3. Padronização Welford Online Z-Score
     this.featureCount++;
     const featureNames = Object.keys(allRawFeatures).sort();

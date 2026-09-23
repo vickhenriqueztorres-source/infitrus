@@ -228,7 +228,7 @@ export class DataQualityTracker {
    */
   onReconnect(symbol, timeframeSeconds) {
     const rec = this._getOrCreateRecord(symbol, timeframeSeconds);
-    this._transitionTo(rec, MarketState.SYNCING_REALTIME, "Reconectado; sincronizando feed");
+    this._transitionTo(rec, MarketState.SYNCING_HISTORY, "Reconectado; sincronizando histórico");
   }
 
   /**

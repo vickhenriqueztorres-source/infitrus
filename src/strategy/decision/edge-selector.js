@@ -295,10 +295,14 @@ export class EdgeSelector {
       label = `PUT (+${(edge * 100).toFixed(1)}% Edge)`;
     }
 
+    const activeP = action === "CALL" ? conservativeProbUp : action === "PUT" ? conservativeProbDown : 0.50;
+    const ev = Number((activeP * payout - (1 - activeP) * 1.0).toFixed(3));
+
     return {
       action,
       label,
       edge,
+      ev,
       quality: 0.70,
       probability: action === "CALL" ? probUp : probDown,
       conservativeProbability: action === "CALL" ? conservativeProbUp : conservativeProbDown,

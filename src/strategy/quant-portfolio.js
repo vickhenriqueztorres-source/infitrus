@@ -139,6 +139,8 @@ export class QuantPortfolio {
         subStrategiesResults: [],
         microstructure: microMetrics,
         reasons: [`Coletando dados M1 (${len}/15 velas necessárias)`],
+        uncertainty: 0.20,
+        isDivergent: false,
         isNewSignal: false,
         isConfluence: false,
         isConflict: false,
@@ -329,6 +331,8 @@ export class QuantPortfolio {
       confluenceFamilies: finalDecision.confluenceFamilies || [],
       confluentCount: finalDecision.confluentCount || 1,
       isConflict: finalDecision.isConflict,
+      isDivergent: Boolean(finalDecision.isConflict),
+      uncertainty: Number((1 - adaptation.marketStability).toFixed(4)),
       isVetoed: finalDecision.isVetoed,
       isNewSignal,
     };
