@@ -50,3 +50,22 @@ test("QuantPortfolio: Avaliação pura e idempotente (sem mutação de estado)",
 
   assert.deepEqual(rep1, rep2, "Avaliação consecutiva com mesmos inputs deve produzir resultado estritamente idêntico");
 });
+
+test("QuantPortfolio: evaluateLight() é pura, leve e não executa as 5 famílias", () => {
+  const portfolio = new QuantPortfolio({ payout: 0.85 });
+  const candles = generateCandles(60, 1.0850, "UP");
+
+  const lightReport = portfolio.evaluateLight({
+    symbol: "EURUSD",
+    timeframeSeconds: 60,
+    candles,
+    isReady: true,
+  });
+
+  assert.equal(lightReport.symbol, "EURUSD");
+  assert.ok(typeof lightReport.regime === "string");
+  assert.ok(typeof lightReport.marketStability === "number");
+  assert.ok(typeof lightReport.uncertainty === "number");
+  assert.equal(lightReport.breakeven, Number((1 / (1 + 0.85)).toFixed(4)));
+  assert.equal(lightReport.strategiesResults, undefined, "evaluateLight não deve calcular strategiesResults");
+});

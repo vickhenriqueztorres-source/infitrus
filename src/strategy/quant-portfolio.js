@@ -306,6 +306,49 @@ export class QuantPortfolio {
   }
 
   /**
+   * Cálculo leve de métricas de mercado (Regime, Estabilidade, Incerteza)
+   * sem executar as 5 famílias e 21 subestratégias.
+   * ESTRITAMENTE PURO (zero efeitos colaterais em this.*).
+   *
+   * @param {Object} params
+   * @returns {Object}
+   */
+  evaluateLight({
+    symbol,
+    timeframeSeconds = 60,
+    candles = [],
+    microMetrics = null,
+    isReady = true,
+  } = {}) {
+    const sym = String(symbol || "").trim().toUpperCase();
+    const len = candles.length;
+    const breakeven = Number((1 / (1 + this.payout)).toFixed(4));
+
+    if (!isReady || len < 15) {
+      return {
+        symbol: sym,
+        timeframeSeconds,
+        regime: "BOOTING",
+        marketStability: 1.0,
+        uncertainty: 0.20,
+        breakeven,
+      };
+    }
+
+    const { featureMap } = this.featureBuilder.build(candles, microMetrics);
+    const adaptation = this.regimeDetector.evaluate(candles, featureMap);
+
+    return {
+      symbol: sym,
+      timeframeSeconds,
+      regime: adaptation.regime,
+      marketStability: adaptation.marketStability,
+      uncertainty: Number((1 - (adaptation.marketStability ?? 1.0)).toFixed(4)),
+      breakeven,
+    };
+  }
+
+  /**
    * Atualização de estado APENAS quando uma vela fecha.
    *
    * @param {Array<Object>} closedCandles

@@ -136,7 +136,7 @@ export class MarketAnalyzer {
     this.currentSignal = {
       action: "WAIT",
       label: "AGUARDAR",
-      indicators: { ema9: null, ema21: null, rsi14: null },
+      indicators: {},
       reasons: ["Inicializando observador quant"],
       isNewSignal: false,
     };
@@ -149,6 +149,13 @@ export class MarketAnalyzer {
 
     this.tabId = null;
     this.windowId = null;
+
+    // Métricas de performance e escrita no storage (P-01, P-02)
+    this._evalDurations = [];
+    this._storageWritesCount = 0;
+    this._lastPerfLogTime = Date.now();
+    this._lastLightMetricsAt = 0;
+    this._cachedLightMetrics = null;
 
     this.init();
   }
@@ -182,12 +189,15 @@ export class MarketAnalyzer {
     if (typeof window !== "undefined") {
       setInterval(() => {
         this.quality.checkStale(this.currentSymbol, this.timeframeSeconds);
-        this.updatePanelDisplay();
       }, 2500);
 
       setInterval(() => {
         this.tickLifecycle();
       }, 250);
+
+      setInterval(() => {
+        this._logPerfMetrics();
+      }, 60000);
     }
 
     // 3. Listener seguro para alteração de payout e vinculação de janela via Background/Side Panel (I-01, I-05)
@@ -207,6 +217,29 @@ export class MarketAnalyzer {
     }
 
     logger.info("SISTEMA", `Analyzer ativo em iframe gráfico de cálculo`);
+  }
+
+  _recordEvalDuration(ms) {
+    if (Number.isFinite(ms)) {
+      this._evalDurations.push(ms);
+    }
+  }
+
+  _logPerfMetrics() {
+    const count = this._evalDurations.length;
+    const avgMs = count > 0
+      ? (this._evalDurations.reduce((a, b) => a + b, 0) / count).toFixed(2)
+      : "0.00";
+    const writes = this._storageWritesCount;
+
+    logger.info(
+      "PERF",
+      `[Métricas 60s] evaluate() médio: ${avgMs}ms (${count} execuções) | Storage writes: ${writes}/min (meta: <= 240/min)`
+    );
+
+    this._evalDurations = [];
+    this._storageWritesCount = 0;
+    this._lastPerfLogTime = Date.now();
   }
 
   /**
@@ -243,6 +276,7 @@ export class MarketAnalyzer {
       }
       const closedCandles = this.store.getCandles(pair, tf, 150);
       const microMetrics = this.intraminuteTracker.getCurrentMetrics(pair, tf);
+      const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
       const decision = this.registry.get(pair).evaluate({
         symbol: pair,
         timeframeSeconds: tf,
@@ -252,6 +286,9 @@ export class MarketAnalyzer {
         gapCount: 0,
         isStale: false,
       });
+      const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
+      this._recordEvalDuration(dur);
+
       this.lastDecideAt = now;
       this.lastCachedDecision = decision;
       this.quantReport = decision;
@@ -467,22 +504,50 @@ export class MarketAnalyzer {
         lastCandle ? lastCandle.close : null
       );
 
-      const qReport = this.registry.get(sym).evaluate({
-        symbol: sym,
-        timeframeSeconds: this.timeframeSeconds,
-        candles: closedCandles,
-        microMetrics,
-        isReady,
-        gapCount: report.gapCount,
-        isStale: report.state === MarketState.STALE,
-      });
+      // 1) evaluate() completo roda SÓ para o par ativo e SÓ quando o lifecycle chama decide (45–57 s).
+      // Fora disso, calcule apenas as métricas leves exibidas na aba "Mercado", no máximo a cada 2 s (P-01, P-02).
+      const isActiveSym = sym === this.currentSymbol;
+      const now = Date.now();
 
-      const cSignal = this.strategy?.evaluate ? this.strategy.evaluate({
-        symbol: sym,
-        timeframeSeconds: this.timeframeSeconds,
-        candles: closedCandles,
-        isReady,
-      }) : { indicators: {} };
+      let light = this._cachedLightMetrics;
+      if (isActiveSym) {
+        if (!light || (now - this._lastLightMetricsAt >= 2000)) {
+          this._lastLightMetricsAt = now;
+          this._cachedLightMetrics = this.registry.get(sym).evaluateLight({
+            symbol: sym,
+            timeframeSeconds: this.timeframeSeconds,
+            candles: closedCandles,
+            microMetrics,
+            isReady,
+          });
+          light = this._cachedLightMetrics;
+        }
+      }
+
+      const cached = (isActiveSym && this.lastCachedDecision && this.lastCachedDecision.symbol === sym)
+        ? this.lastCachedDecision
+        : null;
+
+      const qReport = {
+        action: cached?.action || "WAIT",
+        label: cached?.label || "ESCANEANDO",
+        strategyName: cached?.strategyName || null,
+        subStrategy: cached?.subStrategy || null,
+        correlationGroup: cached?.correlationGroup || null,
+        probability: cached?.probability ?? 0.50,
+        ev: cached?.ev ?? 0,
+        edge: cached?.edge ?? 0,
+        quality: cached?.quality ?? 0,
+        conservativeProbability: cached?.conservativeProbability ?? 0.50,
+        regime: light?.regime || cached?.regime || "RANGE_STABLE",
+        marketStability: light?.marketStability ?? cached?.marketStability ?? 1.0,
+        uncertainty: light?.uncertainty ?? cached?.uncertainty ?? 0.20,
+        strategiesResults: cached?.strategiesResults || this.registry.get(sym)._getEmptyFamilySummary(light?.breakeven || 0.55),
+        subStrategiesResults: cached?.subStrategiesResults || [],
+        reasons: cached?.reasons || ["Escuchando flujo de mercado"],
+      };
+
+      const cSignal = { indicators: {} };
 
       let lastTimeStr = "--:--:--";
       if (lastCandle && lastCandle.timestamp) {
@@ -617,6 +682,7 @@ export class MarketAnalyzer {
       chrome.storage.local.set({
         [`ifx:tab:${this.tabId}:state`]: payload,
       });
+      this._storageWritesCount++;
     } catch (_) {}
   }
 

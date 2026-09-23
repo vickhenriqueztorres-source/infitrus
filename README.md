@@ -275,3 +275,34 @@ Cobertura dos testes:
 10. `test_classify_all_url_categories`: Cobertura de todas as 10 categorias de classificação de URL.
 11. `test_ws_hash_does_not_contain_token`: Hash estável de WebSocket sem vazar credenciais.
 12. `test_output_manager_files_generation`: Geração e integridade física de todos os arquivos de saída.
+
+---
+
+## 10. Extensão Chrome — Guia de Uso Multi-Janela (Passo a Passo)
+
+A extensão **Inflitrus Signals (MV3)** possui arquitetura nativa com suporte e isolamento rigoroso para operação simultânea em múltiplas janelas do Chrome.
+
+### Passo 1: Instalação ou Atualização da Extensão
+1. Abra o Google Chrome e acesse `chrome://extensions/`.
+2. Ative a chave **"Modo do desenvolvedor"** no canto superior direito.
+3. Se estiver instalando pela primeira vez, clique em **"Carregar sem compactação"** e selecione a pasta raiz da extensão.
+4. Se já estiver instalada, clique no ícone de **Recarregar (seta circular)** no card da extensão para aplicar as últimas alterações.
+
+### Passo 2: Abrir Duas Janelas do Chrome com a Corretora
+1. Abra uma primeira janela do Chrome e navegue até a plataforma da corretora (ex.: `https://traderoom.b2trading.io/`). Selecione o primeiro ativo em M1 (por exemplo: `EURUSD`).
+2. Abra uma **segunda janela separada do Chrome** (`Ctrl + N`) e abra a corretora com outro ativo em M1 (por exemplo: `AUDCAD` ou `1000SATS_OTC`).
+
+### Passo 3: Abrir o Side Panel e Organizar as Telas
+1. Em cada janela do Chrome, abra o **Side Panel** clicando no ícone do painel lateral ou no ícone da extensão.
+2. No topo de cada Side Panel, você verá o identificador dinâmico da janela:
+   - **Janela 1:** `<PAR_1> · M1 · Ventana 1`
+   - **Janela 2:** `<PAR_2> · M1 · Ventana 2`
+3. Utilize os botões rápidos da barra superior do Side Panel:
+   - Clique em **"2 Ventanas"** para que a extensão redimensione e posicione as duas janelas automaticamente lado a lado na sua tela (divisão 50% / 50%).
+   - Para 3 telas, clique em **"3 Ventanas"** (divisão 33% / 33% / 33%).
+
+### Passo 4: Isolamento e Operação Concorrente
+- **Zero Vazamento de Sinais:** A Janela 1 escuta e gera sinais exclusivamente do seu próprio ativo. Ticks e eventos do ativo da Janela 2 são ignorados pela Janela 1.
+- **Alertas Sonoros:** Os avisos de voz e bips de contagem (3, 2, 1, entrada) tocam estritamente no Side Panel da janela que gerou o sinal.
+- **Badges e Notificações:** O badge numérico no ícone da extensão é atribuído por `tabId`, não interferindo entre janelas.
+- **Histórico e Logs Independentes:** A aba de histórico (`Registro`) e terminal de logs exibe apenas as operações e métricas da aba ativa daquela janela.

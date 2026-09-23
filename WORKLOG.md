@@ -363,3 +363,47 @@ Confirmo expressa e categoricamente que:
 - Nenhum arquivo em `src/main`, `src/market`, `src/indicators` ou `src/strategy` foi alterado.
 - Nenhuma permissão ou host permission foi adicionado.
 
+---
+
+## 15. Arquitetura v2 (Isolamento, Lifecycle, Relógio)
+
+### 15.1 Frame de Cálculo Único (`chart.b2trading.io`) e ActiveChannel
+- **Detecção Restrita de Frame:** O motor analítico completo (`MarketAnalyzer`) é instanciado **exclusivamente** dentro do iframe de cálculo do gráfico (`chart.b2trading.io`). Frames de nível superior (`window.top` ou traderoom externa) atuam apenas como observadores ou descartam processamento redundante (`isComputeFrame()`).
+- **ActiveChannel (Detecção Passiva do Ativo):** O ativo ativo não é inferido pelo primeiro tick arbitrário do WebSocket. Ele é determinado interceptando em modo leitura passiva as mensagens `subscribe`/`unsubscribe` do WebSocket (`{ action: "subscribe", channel: "PAR-M1" }`) e requisições REST de histórico (`/api/market/history?pair=PAR`). Ao trocar de ativo:
+  1. O par anterior é cancelado no `SignalLifecycle` com razão `ASSET_CHANGED`;
+  2. O cache de símbolos e séries temporais antigas é isolado;
+  3. Ticks de outros pares transmitidos no mesmo socket são filtrados e descartados.
+
+### 15.2 Chaves no Storage Isoladas por Aba (`ifx:tab:<tabId>:*`)
+Para garantir isolamento rigoroso entre janelas e abas simultâneas (evitando vazamento de sinais entre janelas abertas no mesmo perfil do Chrome):
+- `ifx:tab:<tabId>:state`: Estado completo da aba (par ativo, status de feed, dados de qualidade, métricas, snapshot do lifecycle e offset de relógio).
+- `ifx:tab:<tabId>:signals`: Histórico auditado de operações daquela aba específica (WIN, LOSS, DOJI e CANCELLED).
+- `ifx:tab:<tabId>:logs`: Buffer circular de eventos técnicos e operacionais específicos da aba.
+- O Side Panel nativo vincula-se ao `tabId` ativo da sua própria janela (`windowId`) usando `selectTabView()`, impedindo que eventos da Janela 1 pisquem na Janela 2.
+
+### 15.3 Máquina de Estados do Ciclo de Vida do Sinal (`SignalLifecycle`)
+Substitui a antiga decisão tick-a-tick por uma máquina de estados finita determinística, imutável e à prova de repainting:
+
+| Fase | Janela Temporal (segundos da vela) | Descrição e Comportamento |
+|---|---|---|
+| `SCANNING` | 00 s a 44 s | Escaneamento contínuo da vela formadora. Card neutro. Nenhuma decisão emitida. |
+| `DECIDING` | 45 s a 57 s | Janela de decisão. Executa `evaluate()` do par ativo. Se houver Edge qualificado, congela o sinal. |
+| `PRE_SIGNAL` | 46 s a 59 s | Pré-alerta fixado (CALL ou PUT). Trava anti-repaint: **NUNCA inverte de direção**. Dispara 1 alerta sonoro e pips 3, 2, 1 nos segundos 57, 58 e 59. |
+| `NO_ENTRY` | > 57 s (sem sinal) | Nenhuma estratégia atingiu o limiar de vantagem estatística. Aguarda a próxima vela. |
+| `ENTRY_NOW` | 00 s a 05 s da vela alvo | Gatilho de entrada na **ABERTURA DA VELA M1**. Banner com tom sonoro duplo. |
+| `IN_TRADE` | 06 s a 59 s da vela alvo | Operação em andamento no mercado. Contagem regressiva até a expiração. |
+| `SETTLED` | Fechamento da vela alvo | Auditoria estrita em candle fechado (`closed: true`). Classificação em WIN, LOSS ou DOJI e calibração estatística. |
+| `CANCELLED` | Qualquer momento pré-entrada | Cancelamento defensivo caso os dados fiquem instáveis (`DATA_UNSTABLE`) ou o usuário troque de ativo (`ASSET_CHANGED`). |
+
+### 15.4 MarketClock e a Regra "Nunca Sincronizar com candleTimestamp"
+- **Causa Raiz Anterior:** `candleTimestamp` representa o timestamp de **abertura** da vela. Ao sincronizar o relógio local com o candleTimestamp, o relógio era reiniciado para o segundo 00 a cada tick recebido, travando o cronômetro em `01:00 / EXECUTE`.
+- **Arquitetura MarketClock:**
+  - O relógio afere o tempo decorrido do sistema corrigido por um offset (`offsetMs`).
+  - O offset é calibrado **exclusivamente** na transição `NEW_CANDLE` comparando o timestamp de abertura com o `receivedAt` exato de chegada do tick (`candleOpenSec * 1000 - receivedAtMs`), suavizado via média móvel exponencial (EMA $\alpha = 0.3$) e restrito a limites seguros ($\pm 3000$ ms).
+  - Nunca ajusta nem retrocede o relógio para `candleTimestamp` em ticks subsequentes.
+
+### 15.5 Onde Tocam Som, Badge e Notificações
+- **Som:** Toca **exclusivamente no Side Panel** da janela à qual a aba pertence (`src/sidepanel/sidepanel.js` e `audioAlertManager`). O content script e o background service worker não geram áudio.
+- **Badge do Ícone:** Gerenciado com isolamento estrito por aba (`chrome.action.setBadgeText({ tabId, text })`). O badge de uma aba nunca sobrescreve ou afeta outra aba/janela.
+- **Notificações do Sistema:** Disparadas pelo background com dedup por ID de sinal e fechadas automaticamente após o tempo de validade da janela de entrada (5 segundos).
+
