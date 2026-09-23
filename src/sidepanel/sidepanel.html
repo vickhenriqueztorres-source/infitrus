@@ -9,9 +9,6 @@
     html,body{width:100%;min-width:300px;min-height:100vh;background-color:#0B1A1F !important;color:#E6EEF0;margin:0;padding:0;font-family:'JetBrains Mono',ui-monospace,monospace}
     .popup-shell{max-width:420px;margin:0 auto;padding:12px;background:#0B1A1F}
     #side-wave{width:100%;height:48px;display:block;margin:6px 0 2px}
-    .asset-tabs{display:flex;gap:6px;margin:6px 0;overflow-x:auto;padding-bottom:2px}
-    .asset-tab-btn{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border:1px solid var(--border,#8A9BA333);border-radius:6px;background:rgba(138,155,163,.08);color:var(--steel,#8A9BA3);font-size:10px;cursor:pointer;white-space:nowrap;transition:all .15s}
-    .asset-tab-btn.is-active{background:rgba(63,224,197,.14);border-color:#3FE0C5;color:#3FE0C5;font-weight:600}
     .multi-window-bar{display:flex;align-items:center;gap:6px;margin:4px 0 6px;padding:4px 8px;background:rgba(255,255,255,.03);border:1px solid var(--border,#8A9BA333);border-radius:6px}
     .multi-label{font-size:9px;color:var(--steel,#8A9BA3);font-weight:600;letter-spacing:.05em}
     .multi-btn{padding:3px 7px;border:1px solid var(--border,#8A9BA333);border-radius:4px;background:rgba(138,155,163,.1);color:var(--ice,#E6EEF0);font-size:9px;cursor:pointer;transition:all .15s}
@@ -27,6 +24,8 @@
     .signal-card{margin-top:8px;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--surface);transition:all .2s ease}
     .signal-card.is-call{border-color:rgba(63,224,197,.6);background:linear-gradient(180deg,rgba(63,224,197,.12) 0%,rgba(11,26,31,.95) 100%);box-shadow:0 0 16px rgba(63,224,197,.18)}
     .signal-card.is-put{border-color:rgba(255,90,110,.6);background:linear-gradient(180deg,rgba(255,90,110,.12) 0%,rgba(11,26,31,.95) 100%);box-shadow:0 0 16px rgba(255,90,110,.18)}
+    .signal-card.is-execute{border-color:#3FE0C5;box-shadow:0 0 24px rgba(63,224,197,.35);animation:pulse .8s infinite}
+    .signal-card.is-execute.is-put{border-color:#FF5A6E;box-shadow:0 0 24px rgba(255,90,110,.35)}
     .signal-card.is-wait{border-color:var(--border);background:var(--surface)}
     .signal-badge-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
     .signal-badge{padding:3px 8px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:.05em}
@@ -42,8 +41,8 @@
     .signal-card.is-call .signal-icon{color:#3FE0C5}
     .signal-card.is-put .signal-icon{color:#FF5A6E}
     .signal-card.is-wait .signal-icon{color:var(--steel)}
-    .signal-text strong{display:block;font-size:14px;color:var(--ice);letter-spacing:.02em}
-    .signal-text small{font-size:10px;color:var(--steel)}
+    .signal-text strong{display:block;font-size:13px;color:var(--ice);letter-spacing:.02em;line-height:1.3}
+    .signal-text small{font-size:10px;color:var(--steel);display:block;margin-top:2px}
     .signal-progress-wrap{width:100%;height:4px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden;margin-bottom:10px}
     .signal-progress-bar{height:100%;width:0;transition:width .3s ease}
     .signal-card.is-call .signal-progress-bar{background:#3FE0C5}
@@ -58,6 +57,8 @@
     .signal-card.is-wait .signal-entry-timing b{color:var(--steel)}
     .signal-guide{margin-top:8px;padding:8px 10px;border-radius:8px;background:rgba(242,169,59,.12);border:1px solid rgba(242,169,59,.4);color:#F2A93B;font-size:10px;text-align:center}
     .signal-guide.is-execute{background:rgba(63,224,197,.15);border-color:#3FE0C5;color:#3FE0C5}
+
+    .window-badge{padding:2px 6px;border-radius:4px;background:rgba(138,155,163,.15);color:var(--steel);font-size:9.5px;font-weight:600}
 
     /* Cards da Aba Análise Quantitativa */
     .quant-card{margin-top:8px;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface)}
@@ -91,13 +92,16 @@
     .system-card{margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface);display:grid;grid-template-columns:1fr 1fr;gap:6px}
     .system-card span{padding:6px;border:1px solid var(--border);border-radius:6px;color:var(--steel);font-size:9px}
     .system-card strong{display:block;color:var(--ice);font-size:11px;font-weight:500;margin-top:2px}
-    .signals-history-list{max-height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;margin-top:4px}
-    .history-row{display:grid;grid-template-columns:46px 42px 1fr 40px 48px;gap:4px;align-items:center;padding:4px 6px;border-radius:4px;background:rgba(0,0,0,.2);border:1px solid var(--border);font-size:8.5px}
+    .signals-history-list{max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;margin-top:4px}
+    .history-row{display:grid;grid-template-columns:40px 48px 36px 1fr 50px;gap:4px;align-items:center;padding:4px 6px;border-radius:4px;background:rgba(0,0,0,.2);border:1px solid var(--border);font-size:8.5px}
+    .history-row.is-cancelled{opacity:0.6}
+    .history-row.is-cancelled .history-desc{text-decoration:line-through}
     .history-badge{font-weight:700;padding:1px 4px;border-radius:3px;text-align:center}
     .history-badge.WIN{background:rgba(63,224,197,.2);color:#3FE0C5}
     .history-badge.LOSS{background:rgba(255,90,110,.2);color:#FF5A6E}
     .history-badge.DOJI{background:rgba(242,169,59,.2);color:#F2A93B}
     .history-badge.PENDING{background:rgba(138,155,163,.2);color:var(--steel)}
+    .history-badge.CANCELADA{background:rgba(138,155,163,.15);color:var(--steel)}
     .logs-card{margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
     .logs-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;color:var(--steel);font-size:10px;letter-spacing:.08em}
     .logs-head div{display:flex;gap:5px}
@@ -125,19 +129,16 @@
       </div>
     </header>
 
-    <div class="multi-window-bar" aria-label="Organizar telas">
-      <span class="multi-label">TELAS:</span>
-      <button id="btn-tile-2" class="multi-btn" type="button" title="Organizar 2 gráficos lado a lado">2 Telas</button>
-      <button id="btn-tile-3" class="multi-btn" type="button" title="Organizar 3 gráficos lado a lado">3 Telas</button>
+    <div class="multi-window-bar" aria-label="Organizar ventanas">
+      <span class="multi-label">VENTANAS:</span>
+      <button id="btn-tile-2" class="multi-btn" type="button" title="Organizar 2 gráficos lado a lado">2 Ventanas</button>
+      <button id="btn-tile-3" class="multi-btn" type="button" title="Organizar 3 gráficos lado a lado">3 Ventanas</button>
     </div>
 
-    <!-- Abas de Ativos Monitorados -->
-    <div id="asset-tabs" class="asset-tabs" aria-label="Ativos monitorados"></div>
-
     <!-- Navegação de Abas Principais -->
-    <nav class="view-nav-tabs" aria-label="Abas de visualização">
-      <button id="tab-btn-signal" class="view-tab-btn is-active" type="button">⚡ Sinal</button>
-      <button id="tab-btn-quant" class="view-tab-btn" type="button">📊 Análise Quant</button>
+    <nav class="view-nav-tabs" aria-label="Pestañas de visualización">
+      <button id="tab-btn-signal" class="view-tab-btn is-active" type="button">⚡ Señal</button>
+      <button id="tab-btn-quant" class="view-tab-btn" type="button">📊 Análisis Quant</button>
       <button id="tab-btn-logs" class="view-tab-btn" type="button">📋 Logs / Sistema</button>
     </nav>
 
@@ -146,23 +147,23 @@
       <section class="status-card">
         <p class="eyebrow"><i id="status-dot" class="dot amber"></i><span id="status-copy">Activo · Buscando la transmisión…</span></p>
         <canvas id="side-wave" width="360" height="48" aria-label="Frecuencia del mercado"></canvas>
-        <div class="asset-row"><span id="asset">---</span><span>·</span><span id="timeframe">M1</span></div>
+        <div class="asset-row"><span id="asset">---</span><span>·</span><span id="timeframe">M1</span><span>·</span><span id="window-tag" class="window-badge">Ventana 1</span></div>
         <p class="feed"><i id="feed-dot" class="dot amber"></i><span id="feed-copy">Datos inestables</span></p>
       </section>
 
       <!-- Card Visual de Sinal M1 em Tempo Real -->
-      <section id="signal-card" class="signal-card is-wait" aria-label="Sinal M1">
+      <section id="signal-card" class="signal-card is-wait" aria-label="Señal M1" aria-live="polite">
         <div class="signal-badge-row">
           <span id="signal-direction-badge" class="signal-badge wait">ESCANEANDO</span>
-          <span id="signal-strategy-badge" class="strategy-badge">21 SUBESTRATÉGIAS</span>
+          <span id="signal-strategy-badge" class="strategy-badge">21 SUBESTRATEGIAS</span>
           <span id="signal-timer-badge" class="timer-badge">01:00</span>
         </div>
         <div class="signal-main-row">
           <div id="signal-icon" class="signal-icon">◎</div>
           <div class="signal-text">
-            <strong id="signal-title">Aguardando Oportunidade</strong>
-            <small id="signal-subtitle">Analisando fluxo e probabilidades em tempo real...</small>
-            <div id="signal-entry-timing" class="signal-entry-timing">ENTRADA: <b id="entry-timing-label">NA ABERTURA DA VELA (00:00)</b></div>
+            <strong id="signal-title">Escuchando mercado · decisión en 45s</strong>
+            <small id="signal-subtitle"></small>
+            <div id="signal-entry-timing" class="signal-entry-timing">ENTRADA: <b id="entry-timing-label">EN LA APERTURA DE LA PRÓXIMA VELA</b></div>
           </div>
         </div>
         <div class="signal-progress-wrap">
@@ -171,11 +172,8 @@
         <div class="signal-metrics-row">
           <div class="sig-metric"><label>PROB</label><span id="sig-prob">--%</span></div>
           <div class="sig-metric"><label>EDGE</label><span id="sig-edge">--%</span></div>
-          <div class="sig-metric"><label>QUALIDADE</label><span id="sig-qual">--%</span></div>
+          <div class="sig-metric"><label>CALIDAD</label><span id="sig-qual">--%</span></div>
           <div class="sig-metric"><label>WR GLOBAL</label><span id="sig-wr">--%</span></div>
-        </div>
-        <div id="signal-guide" class="signal-guide" style="display:none;">
-          <span id="guide-text">⚠️ <strong>PREPARE A ENTRADA</strong>: Próxima vela em <b id="guide-seconds">3s</b></span>
         </div>
       </section>
     </div>
@@ -185,12 +183,12 @@
       <!-- Resumo do Radar Quantitativo -->
       <section class="quant-card" aria-label="Radar Quantitativo">
         <div class="quant-card-header">
-          <strong>RADAR QUANTITATIVO M1</strong>
-          <span id="q-regime" class="regime-tag">REGIME: NORMAL</span>
+          <strong>RADAR CUANTITATIVO M1</strong>
+          <span id="q-regime" class="regime-tag">RÉGIMEN: NORMAL</span>
         </div>
         <div class="quant-summary-grid">
           <div class="q-metric-box">
-            <label>SUBESTRATÉGIA LÍDER</label>
+            <label>SUBESTRATEGIA LÍDER</label>
             <strong id="q-top-substrat">---</strong>
           </div>
           <div class="q-metric-box">
@@ -202,17 +200,17 @@
             <strong id="q-prob-cons">50.0%</strong>
           </div>
           <div class="q-metric-box">
-            <label>INCERTEZA BRIER</label>
+            <label>INCERTIDUMBRE BRIER</label>
             <strong id="q-uncertainty">0.00</strong>
           </div>
         </div>
       </section>
 
       <!-- Tabela das 5 Famílias Independentes -->
-      <section class="quant-card" aria-label="As 5 Famílias">
+      <section class="quant-card" aria-label="Las 5 Familias">
         <div class="quant-card-header">
-          <strong>AS 5 FAMÍLIAS INDEPENDENTES</strong>
-          <small id="q-families-active">0/5 ativas</small>
+          <strong>LAS 5 FAMILIAS INDEPENDIENTES</strong>
+          <small id="q-families-active">0/5 activas</small>
         </div>
         <div class="families-table" id="families-table">
           <!-- Injetado dinamicamente via JS -->
@@ -220,40 +218,40 @@
       </section>
 
       <!-- Microestrutura Intraminuto -->
-      <section class="quant-card" aria-label="Microestrutura">
+      <section class="quant-card" aria-label="Microestructura">
         <div class="quant-card-header">
-          <strong>MICROESTRUTURA DE TICKS</strong>
-          <span id="micro-phase" class="tag-subtle">ACÚMULO</span>
+          <strong>MICROESTRUCTURA DE TICKS</strong>
+          <span id="micro-phase" class="tag-subtle">ACUMULACIÓN</span>
         </div>
         <div class="micro-grid">
-          <div class="micro-item"><label>VELOCIDADE</label><strong id="m-vel">0.0 t/s</strong></div>
-          <div class="micro-item"><label>PRESSÃO COMPRADORA</label><strong id="m-buy">50%</strong></div>
-          <div class="micro-item"><label>TICKS NA VELA</label><strong id="m-ticks">0</strong></div>
-          <div class="micro-item"><label>ACELERAÇÃO</label><strong id="m-acc">0.00</strong></div>
+          <div class="micro-item"><label>VELOCIDAD</label><strong id="m-vel">0.0 t/s</strong></div>
+          <div class="micro-item"><label>PRESIÓN COMPRADORA</label><strong id="m-buy">50%</strong></div>
+          <div class="micro-item"><label>TICKS EN LA VELA</label><strong id="m-ticks">0</strong></div>
+          <div class="micro-item"><label>ACELERACIÓN</label><strong id="m-acc">0.00</strong></div>
         </div>
       </section>
 
       <!-- Auditoria de Assertividade -->
-      <section class="quant-card" aria-label="Auditoria de Performance">
+      <section class="quant-card" aria-label="Auditoría de Rendimiento">
         <div class="quant-card-header">
-          <strong>AUDITORIA EM TEMPO REAL</strong>
+          <strong>AUDITORÍA EN TIEMPO REAL</strong>
           <span id="aud-badge" class="tag-subtle">100% AUDITADO</span>
         </div>
         <div class="audit-stats-grid">
           <div class="audit-stat"><label>WIN RATE REAL</label><strong id="aud-wr">0.0%</strong></div>
-          <div class="audit-stat"><label>PLACAR OFICIAL</label><strong id="aud-score">0W / 0L</strong></div>
-          <div class="audit-stat"><label>LUCRO LÍQUIDO</label><strong id="aud-pnl">+0.0 un</strong></div>
+          <div class="audit-stat"><label>MARCADOR OFICIAL</label><strong id="aud-score">0W / 0L</strong></div>
+          <div class="audit-stat"><label>GANANCIA NETA</label><strong id="aud-pnl">+0.0 un</strong></div>
           <div class="audit-stat"><label>DOJIS (EMPATES)</label><strong id="aud-dojis">0</strong></div>
         </div>
       </section>
 
       <!-- Gatilhos & Evidências Estatísticas -->
-      <section class="quant-card" aria-label="Evidências Estatísticas">
+      <section class="quant-card" aria-label="Evidencias Estadísticas">
         <div class="quant-card-header">
-          <strong>EVIDÊNCIAS & GATILHOS DA DECISÃO</strong>
+          <strong>EVIDENCIAS Y DISPARADORES</strong>
         </div>
         <ul id="q-reasons-list" class="reasons-list">
-          <li>Aguardando formação estatística do mercado...</li>
+          <li>Esperando formación estadística del mercado...</li>
         </ul>
       </section>
     </div>
@@ -268,40 +266,40 @@
       </section>
 
       <!-- Histórico de Sinais Liquidados -->
-      <section class="quant-card" aria-label="Histórico de Sinais">
+      <section class="quant-card" aria-label="Historial de Señales">
         <div class="quant-card-header">
-          <strong>ÚLTIMOS SINAIS AUDITADOS</strong>
-          <span id="history-count" class="tag-subtle">0 sinais</span>
+          <strong>ÚLTIMAS SEÑALES AUDITADAS</strong>
+          <span id="history-count" class="tag-subtle">0 señales</span>
         </div>
         <div id="signals-history-list" class="signals-history-list">
-          <p class="logs-empty">Nenhum sinal liquidado ainda nesta sessão.</p>
+          <p class="logs-empty">Ninguna señal liquidada aún en esta sesión.</p>
         </div>
       </section>
 
       <!-- Logs em Tempo Real -->
       <section class="logs-card" aria-label="Logs en tiempo real">
         <div class="logs-head">
-          <strong>LOGS EM TEMPO REAL</strong>
+          <strong>LOGS EN TIEMPO REAL</strong>
           <div>
             <button id="copy-logs" type="button">Copiar</button>
             <button id="clear-logs" type="button">Limpiar</button>
           </div>
         </div>
         <div id="logs-list" class="logs-list" role="log" aria-live="polite">
-          <p class="logs-empty">Esperando eventos do sistema…</p>
+          <p class="logs-empty">Esperando eventos del sistema…</p>
         </div>
       </section>
     </div>
 
     <!-- Preferências & Ações Fixas -->
     <section class="switches" aria-label="Preferencias">
-      <label><span><strong>Sonido</strong><small>Alertas de sinal e bips 3, 2, 1</small></span><input id="sound-toggle" type="checkbox"><i></i></label>
-      <label><span><strong>Notificaciones</strong><small>Avisos durante a janela válida</small></span><input id="notification-toggle" type="checkbox" checked><i></i></label>
+      <label><span><strong>Sonido</strong><small>Alertas de señal y bips 3, 2, 1</small></span><input id="sound-toggle" type="checkbox"><i></i></label>
+      <label><span><strong>Notificaciones</strong><small>Avisos durante la ventana válida</small></span><input id="notification-toggle" type="checkbox" checked><i></i></label>
     </section>
 
     <button id="open-traderoom" class="primary" type="button">Abrir B2Trading</button>
-    <p class="legal">Inflitrus Signals é uma ferramenta analítica matemática. Não executa ordens automaticamente nem garante retornos.</p>
-    <footer>Inflitrus detecta. Você decide.</footer>
+    <p class="legal">Inflitrus Signals es un instrumento analítico cuantitativo. No ejecuta órdenes automáticamente ni garantiza resultados.</p>
+    <footer>Inflitrus detecta. Tú decides.</footer>
   </main>
   <script src="sidepanel.js" type="module"></script>
 </body>

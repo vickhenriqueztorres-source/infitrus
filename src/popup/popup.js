@@ -54,10 +54,13 @@ function renderState(data = {}) {
   const feedDot = document.getElementById("feed-dot");
   if (feedDot) feedDot.className = `dot ${vm.context?.feed === "Estable" ? "teal" : "amber"}`;
 
-  wave?.destroy();
   const canvas = document.getElementById("popup-wave");
   if (canvas) {
-    wave = new WaveRenderer(canvas, { state: vm.wave });
+    if (!wave) {
+      wave = new WaveRenderer(canvas, { state: vm.wave });
+    } else {
+      wave.setState(vm.wave);
+    }
   }
 }
 

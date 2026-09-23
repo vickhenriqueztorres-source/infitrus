@@ -6,6 +6,7 @@ import { WaveRenderer } from "../ui/wave.js";
 import { translateLogMessage, translateLogTag } from "../ui/components/layout.js";
 import { selectTabView } from "../ui/tab-view-selector.js";
 import { soundsForTransition } from "../ui/sound-transitions.js";
+import { formatLifecycleCard } from "../ui/lifecycle-card.js";
 
 const localMarketClock = new MarketClock();
 const NOTIFICATIONS_KEY = "ifx_notifications_v1";
@@ -13,6 +14,7 @@ let wave;
 let currentLogs = [];
 let boundTabId = null;
 let boundWindowId = null;
+let currentWindowLabel = "Ventana 1";
 let isBoundTabB2 = false;
 let activeMainTab = "signal"; // 'signal' | 'quant' | 'logs'
 let activeSignalData = null;
@@ -25,6 +27,26 @@ function sendToBoundTab(message) {
     const pending = chrome.tabs.sendMessage(boundTabId, message);
     pending?.catch?.(() => {});
   } catch (_) {}
+}
+
+/**
+ * Atualiza o rótulo identificador amigável da janela (Ventana 1, Ventana 2, ...)
+ */
+async function updateWindowLabel() {
+  if (!boundWindowId || typeof chrome === "undefined" || !chrome.windows?.getAll) {
+    currentWindowLabel = boundWindowId ? `Ventana ${boundWindowId}` : "Ventana 1";
+    return;
+  }
+  try {
+    const wins = await chrome.windows.getAll();
+    const sorted = wins.sort((a, b) => a.id - b.id);
+    const idx = sorted.findIndex((w) => w.id === boundWindowId);
+    currentWindowLabel = idx >= 0 ? `Ventana ${idx + 1}` : `Ventana ${boundWindowId}`;
+  } catch (_) {
+    currentWindowLabel = `Ventana ${boundWindowId}`;
+  }
+  const winTag = document.getElementById("window-tag");
+  if (winTag) winTag.textContent = currentWindowLabel;
 }
 
 /**
@@ -60,156 +82,138 @@ function playSoundList(sounds = []) {
 }
 
 /**
- * Atualiza o cronômetro M1 e a barra de contagem regressiva desacoplado via localMarketClock
+ * Atualiza o cronômetro M1 e a barra de contagem regressiva desacoplado via localMarketClock (T-06)
+ * Card principal = UMA frase por estado, sem mensagens contraditórias.
  */
 function updateClockOnlyUI() {
-  const remaining = localMarketClock.remainingInCandle(60);
-  const sec = localMarketClock.secondInCandle(60);
-  const mins = Math.floor(remaining / 60);
-  const secs = remaining % 60;
-  const formattedTime = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
-  const progressPct = Number((((60 - remaining) / 60) * 100).toFixed(1));
+  const nowSec = localMarketClock.nowSec();
+  const lifecycleData = activeSignalData?.lifecycle || lastLifecycle || {
+    pair: activeSignalData?.symbol || "Mercado",
+    tf: activeSignalData?.timeframeSeconds || 60,
+  };
 
+  const cardData = formatLifecycleCard(lifecycleData, nowSec);
+
+  // 1. Classes do Card e acessibilidade aria-live (assertive em ENTRY_NOW, polite no resto)
+  const card = document.getElementById("signal-card");
+  if (card) {
+    card.classList.remove("is-call", "is-put", "is-wait", "is-execute");
+    card.setAttribute("aria-live", cardData.ariaLive);
+
+    if (cardData.phase === "ENTRY_NOW") {
+      card.classList.add("is-execute", cardData.direction === "CALL" ? "is-call" : "is-put");
+    } else if (cardData.phase === "PRE_SIGNAL") {
+      card.classList.add(cardData.direction === "CALL" ? "is-call" : "is-put");
+    } else if (cardData.phase === "SETTLED") {
+      card.classList.add(cardData.badgeClass === "call" ? "is-call" : cardData.badgeClass === "put" ? "is-put" : "is-wait");
+    } else {
+      card.classList.add("is-wait");
+    }
+  }
+
+  // 2. Badge de Fase / Direção
+  const badge = document.getElementById("signal-direction-badge");
+  if (badge) {
+    badge.className = `signal-badge ${cardData.badgeClass}`;
+    badge.textContent = cardData.badgeText;
+  }
+
+  // 3. Cronômetro / Contagem Regressiva
   const timerBadge = document.getElementById("signal-timer-badge");
   if (timerBadge) {
-    timerBadge.textContent = formattedTime;
-    timerBadge.classList.toggle("warning", remaining <= 15 && remaining > 3);
-    timerBadge.classList.toggle("prepare", remaining <= 3);
+    timerBadge.textContent = cardData.secondsRemaining !== null && cardData.secondsRemaining !== undefined
+      ? `${cardData.secondsRemaining}s`
+      : "00s";
+    timerBadge.setAttribute("aria-label", cardData.ariaLabel);
+    timerBadge.classList.toggle("warning", cardData.secondsRemaining <= 15 && cardData.secondsRemaining > 3);
+    timerBadge.classList.toggle("prepare", cardData.secondsRemaining <= 3 && cardData.secondsRemaining > 0);
   }
 
+  // 4. Ícone do Card
+  const iconEl = document.getElementById("signal-icon");
+  if (iconEl) {
+    if (cardData.phase === "ENTRY_NOW" || cardData.phase === "PRE_SIGNAL") {
+      iconEl.textContent = cardData.direction === "CALL" ? "▲" : "▼";
+    } else if (cardData.phase === "SETTLED") {
+      iconEl.textContent = cardData.badgeClass === "call" ? "✓" : cardData.badgeClass === "put" ? "✗" : "―";
+    } else {
+      iconEl.textContent = "◎";
+    }
+  }
+
+  // 5. Frase Principal Única e Linha Secundária
+  const titleEl = document.getElementById("signal-title");
+  if (titleEl) {
+    titleEl.textContent = cardData.primaryText;
+  }
+
+  const subTitleEl = document.getElementById("signal-subtitle");
+  if (subTitleEl) {
+    subTitleEl.textContent = cardData.secondaryText || (activeSignalData?.subStrategy ? `Estrategia: ${activeSignalData.subStrategy}` : "");
+  }
+
+  // 6. Barra de Progresso ligada ao estado (não ao minuto cru)
   const progressBar = document.getElementById("signal-progress-bar");
   if (progressBar) {
-    progressBar.style.width = `${Math.min(100, Math.max(0, progressPct))}%`;
+    progressBar.style.width = `${Math.min(100, Math.max(0, cardData.progressPct))}%`;
   }
 
-  // Pips nos segundos 57, 58 e 59 se houver PRE_SIGNAL ativo
+  // 7. Rótulo de Momento de Execução
+  const timingLabel = document.getElementById("entry-timing-label");
+  if (timingLabel) {
+    if (cardData.phase === "ENTRY_NOW") {
+      timingLabel.innerHTML = `<span style="color:#3FE0C5;font-weight:800">¡ENTRA AHORA EN LA APERTURA!</span>`;
+    } else if (cardData.phase === "PRE_SIGNAL") {
+      timingLabel.innerHTML = `EN LA APERTURA (en ${cardData.secondsRemaining}s)`;
+    } else if (cardData.phase === "IN_TRADE") {
+      timingLabel.innerHTML = `OPERACIÓN EN CURSO`;
+    } else if (cardData.phase === "SETTLED") {
+      timingLabel.innerHTML = `OPERACIÓN LIQUIDADA`;
+    } else {
+      timingLabel.innerHTML = `EN LA APERTURA DE LA PRÓXIMA VELA`;
+    }
+  }
+
+  // 8. Pips nos segundos 57, 58 e 59 se houver PRE_SIGNAL ativo
   if (lastLifecycle?.current?.phase === "PRE_SIGNAL") {
+    const sec = localMarketClock.secondInCandle(60);
     const pipSounds = soundsForTransition(lastLifecycle, lastLifecycle, sec, playedSoundSet);
     playSoundList(pipSounds);
   }
 }
 
 /**
- * Atualiza o cronômetro M1 e a barra de contagem regressiva em tempo real
- */
-function updateCountdownUI(timerState) {
-  if (!timerState) return;
-
-  const timerBadge = document.getElementById("signal-timer-badge");
-  if (timerBadge) {
-    timerBadge.textContent = timerState.formattedTime || "01:00";
-    timerBadge.classList.toggle("warning", timerState.remainingSeconds <= 15 && timerState.remainingSeconds > 3);
-    timerBadge.classList.toggle("prepare", timerState.remainingSeconds <= 3);
-  }
-
-  const progressBar = document.getElementById("signal-progress-bar");
-  if (progressBar) {
-    progressBar.style.width = `${Math.min(100, Math.max(0, timerState.progressPct || 0))}%`;
-  }
-
-  // Guia de execução na janela de fechamento/abertura
-  const guide = document.getElementById("signal-guide");
-  const guideText = document.getElementById("guide-text");
-  const vm = createViewModel(activeSignalData || {}, timerState);
-  const act = vm.signal ? vm.signal.direction : "WAIT";
-  const phaseLabel = vm.signal?.phaseLabel || "";
-
-  if (guide && guideText) {
-    if (vm.signal && (act === "CALL" || act === "PUT")) {
-      guide.style.display = "block";
-      if (vm.signal.rawPhase === "ENTRY_NOW" || timerState.remainingSeconds <= 1) {
-        guide.className = "signal-guide is-execute";
-        guideText.innerHTML = `🚀 <strong>ENTRADA CONFIRMADA (${act})</strong>: Abrir operação agora na ABERTURA!`;
-      } else if (timerState.remainingSeconds <= 3) {
-        guide.className = "signal-guide";
-        guideText.innerHTML = `⚠️ <strong>PREPARE O CLIQUE (${act})</strong>: Abertura em <b>${timerState.remainingSeconds}s</b>`;
-      } else {
-        guide.className = "signal-guide";
-        guideText.innerHTML = `⚠️ <strong>${phaseLabel || "PRÉ-ALERTA"} (${act})</strong>: Entrada na ABERTURA em <b>${timerState.remainingSeconds}s</b>`;
-      }
-    } else {
-      guide.style.display = "none";
-    }
-  }
-}
-
-/**
  * Renderiza o Card Visual de Sinal M1
  */
-function renderSignalCard(data, timerState = null) {
-  const card = document.getElementById("signal-card");
-  if (!card) return;
-
+function renderSignalCard(data) {
   activeSignalData = data;
-  const currentTimer = timerState || candleTimer.getState();
-  const vm = createViewModel(data || {}, currentTimer);
+  if (data?.lifecycle) {
+    lastLifecycle = data.lifecycle;
+  }
 
-  const action = vm.signal ? vm.signal.direction : "WAIT";
-  const prob = Number(vm.signal?.probability || data?.conservativeProbability || data?.probability || data?.quantProbability || 0.5);
+  const stratBadge = document.getElementById("signal-strategy-badge");
+  if (stratBadge) {
+    stratBadge.textContent = (data?.subStrategy || data?.strategyName || "21 SUBESTRATEGIAS").toUpperCase();
+  }
+
+  const prob = Number(data?.conservativeProbability || data?.probability || data?.quantProbability || 0.5);
   const edge = Number(data?.edge ?? 0);
   const qual = Number(data?.quality ?? 0);
-  const substrat = data?.subStrategy || data?.strategyName || (action !== "WAIT" ? "Quant M1" : "21 SUBESTRATÉGIAS");
   const stats = data?.stats || {};
 
-  // Classes do Card
-  card.classList.remove("is-call", "is-put", "is-wait");
-  const badge = document.getElementById("signal-direction-badge");
-  const stratBadge = document.getElementById("signal-strategy-badge");
-  const iconEl = document.getElementById("signal-icon");
-  const titleEl = document.getElementById("signal-title");
-  const subTitleEl = document.getElementById("signal-subtitle");
-  const timingLabel = document.getElementById("entry-timing-label");
-
-  if (action === "CALL") {
-    card.classList.add("is-call");
-    if (badge) {
-      badge.className = "signal-badge call";
-      badge.textContent = "▲ CALL (COMPRA)";
-    }
-    if (iconEl) iconEl.textContent = "▲";
-    if (titleEl) titleEl.textContent = `Operação CALL · ${substrat}`;
-    if (subTitleEl) subTitleEl.textContent = "Frequência de alta detectada no fluxo. Entrada na abertura.";
-    if (timingLabel) timingLabel.textContent = "NA ABERTURA DA VELA (00:00)";
-  } else if (action === "PUT") {
-    card.classList.add("is-put");
-    if (badge) {
-      badge.className = "signal-badge put";
-      badge.textContent = "▼ PUT (VENDA)";
-    }
-    if (iconEl) iconEl.textContent = "▼";
-    if (titleEl) titleEl.textContent = `Operação PUT · ${substrat}`;
-    if (subTitleEl) subTitleEl.textContent = "Frequência de baixa detectada no fluxo. Entrada na abertura.";
-    if (timingLabel) timingLabel.textContent = "NA ABERTURA DA VELA (00:00)";
-  } else {
-    card.classList.add("is-wait");
-    if (badge) {
-      badge.className = "signal-badge wait";
-      badge.textContent = data?.signalLabel || "ESCANEANDO";
-    }
-    if (iconEl) iconEl.textContent = "◎";
-    if (titleEl) titleEl.textContent = "Aguardando Oportunidade";
-    if (subTitleEl) subTitleEl.textContent = "Analisando microestrutura e confluências quantitativas...";
-    if (timingLabel) timingLabel.textContent = "NA ABERTURA DA PRÓXIMA VELA";
-  }
-
-  if (stratBadge) {
-    stratBadge.textContent = substrat.toUpperCase();
-  }
-
-  // Métricas do Card
   const probEl = document.getElementById("sig-prob");
-  if (probEl) probEl.textContent = action !== "WAIT" ? `${(prob * 100).toFixed(0)}%` : "--%";
+  if (probEl) probEl.textContent = data?.action && data.action !== "WAIT" ? `${(prob * 100).toFixed(0)}%` : "--%";
 
   const edgeEl = document.getElementById("sig-edge");
-  if (edgeEl) edgeEl.textContent = action !== "WAIT" ? `${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(1)}%` : "--%";
+  if (edgeEl) edgeEl.textContent = data?.action && data.action !== "WAIT" ? `${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(1)}%` : "--%";
 
   const qualEl = document.getElementById("sig-qual");
-  if (qualEl) qualEl.textContent = action !== "WAIT" ? `${(qual * 100).toFixed(0)}%` : "--%";
+  if (qualEl) qualEl.textContent = data?.action && data.action !== "WAIT" ? `${(qual * 100).toFixed(0)}%` : "--%";
 
   const wrEl = document.getElementById("sig-wr");
   if (wrEl) wrEl.textContent = stats.total > 0 ? `${Number(stats.winRate || 0).toFixed(0)}%` : "--%";
 
-  updateCountdownUI(currentTimer);
+  updateClockOnlyUI();
 }
 
 /**
@@ -220,7 +224,7 @@ function renderQuantAnalysis(data) {
 
   // 1. Radar Quantitativo
   const regimeEl = document.getElementById("q-regime");
-  if (regimeEl) regimeEl.textContent = `REGIME: ${(data.regime || "NORMAL").toUpperCase()}`;
+  if (regimeEl) regimeEl.textContent = `RÉGIMEN: ${(data.regime || "NORMAL").toUpperCase()}`;
 
   const topSubEl = document.getElementById("q-top-substrat");
   if (topSubEl) topSubEl.textContent = data.subStrategy || data.strategyName || "---";
@@ -248,11 +252,11 @@ function renderQuantAnalysis(data) {
     });
 
     const standardFamilies = [
-      { id: "continuation", label: "Continuação", defaultSub: "Impulse / Trend Thrust" },
-      { id: "reversion", label: "Reversão", defaultSub: "Wick / Exaustão" },
-      { id: "microstructure", label: "Microestrutura", defaultSub: "Tick Pressure / Flow" },
-      { id: "volatility_expansion", label: "Volatilidade", defaultSub: "Breakout / Expansion" },
-      { id: "historical_analogy", label: "Analogia (KNN)", defaultSub: "Exact Pattern / Shape" },
+      { id: "continuation", label: "Continuación", defaultSub: "Impulse / Trend Thrust" },
+      { id: "reversion", label: "Reversión", defaultSub: "Wick / Exaustión" },
+      { id: "microstructure", label: "Microestructura", defaultSub: "Tick Pressure / Flow" },
+      { id: "volatility_expansion", label: "Volatilidad", defaultSub: "Breakout / Expansion" },
+      { id: "historical_analogy", label: "Analogía (KNN)", defaultSub: "Exact Pattern / Shape" },
     ];
 
     let activeCount = 0;
@@ -292,7 +296,7 @@ function renderQuantAnalysis(data) {
     });
 
     if (famActiveCountEl) {
-      famActiveCountEl.textContent = `${activeCount}/5 ativas`;
+      famActiveCountEl.textContent = `${activeCount}/5 activas`;
     }
   }
 
@@ -332,7 +336,7 @@ function renderQuantAnalysis(data) {
     const reasons = data.quantReasons || data.signalReasons || data.reasons || [];
     if (!reasons.length) {
       const li = document.createElement("li");
-      li.textContent = "Monitorando fluxo e confluências de microestrutura...";
+      li.textContent = "Esperando formación estadística del mercado...";
       reasonsList.appendChild(li);
     } else {
       reasons.slice(0, 5).forEach((r) => {
@@ -345,7 +349,8 @@ function renderQuantAnalysis(data) {
 }
 
 /**
- * Renderiza o Histórico de Sinais na Aba de Logs
+ * Renderiza o Histórico de Sinais da aba vinculada (I-01, T-06)
+ * Cancelados aparecem riscados, com o motivo, e não contam no placar.
  */
 function renderSignalsHistory(signals = []) {
   const list = document.getElementById("signals-history-list");
@@ -353,39 +358,52 @@ function renderSignalsHistory(signals = []) {
   if (!list) return;
 
   const rawList = Array.isArray(signals) ? signals : [];
-  if (countBadge) countBadge.textContent = `${rawList.length} sinais`;
+  if (countBadge) countBadge.textContent = `${rawList.length} señales`;
 
   if (!rawList.length) {
-    list.innerHTML = `<p class="logs-empty">Nenhum sinal liquidado ainda nesta sessão.</p>`;
+    list.innerHTML = `<p class="logs-empty">Ninguna señal liquidada aún en esta sesión.</p>`;
     return;
   }
 
   list.replaceChildren();
-  rawList.slice(0, 15).forEach((sig) => {
+  rawList.slice(0, 20).forEach((sig) => {
     const row = document.createElement("div");
-    row.className = "history-row";
+    const isCancelled = sig.result === "CANCELLED" || sig.status === "CANCELLED";
+    row.className = `history-row ${isCancelled ? "is-cancelled" : ""}`;
 
     const time = document.createElement("time");
-    time.textContent = sig.timeFormatted || "--:--";
+    time.textContent = sig.timeFormatted || (sig.candleTimestamp ? new Date(sig.candleTimestamp * 1000).toTimeString().slice(0, 5) : "--:--");
 
-    const badge = document.createElement("span");
-    const res = sig.result || sig.status || "PENDING";
-    badge.className = `history-badge ${res}`;
-    badge.textContent = res;
+    const pair = document.createElement("span");
+    pair.style.cssText = "font-weight:600;color:var(--ice);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    pair.textContent = sig.symbol || sig.pair || "---";
 
-    const desc = document.createElement("span");
-    desc.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ice);font-weight:500;";
-    desc.textContent = `${sig.direction} ${sig.symbol || ""}`;
+    const dirBadge = document.createElement("span");
+    dirBadge.style.cssText = `font-weight:700;color:${sig.action === "CALL" || sig.direction === "CALL" ? "#3FE0C5" : "#FF5A6E"}`;
+    dirBadge.textContent = sig.action || sig.direction || "---";
 
-    const prob = document.createElement("span");
-    prob.style.cssText = "text-align:right;color:var(--steel);";
-    prob.textContent = sig.probability ? `${(sig.probability * 100).toFixed(0)}%` : "--";
+    const detail = document.createElement("span");
+    detail.className = "history-desc";
+    detail.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--steel);font-size:8px;";
 
-    const pnl = document.createElement("span");
-    pnl.style.cssText = `text-align:right;font-weight:700;color:${sig.pnlUnits > 0 ? "#3FE0C5" : sig.pnlUnits < 0 ? "#FF5A6E" : "var(--steel)"}`;
-    pnl.textContent = sig.pnlUnits != null ? `${sig.pnlUnits > 0 ? "+" : ""}${sig.pnlUnits.toFixed(1)} un` : "--";
+    if (isCancelled) {
+      const reason = sig.reason || sig.cancelReason || "datos inestables";
+      const reasonText = reason === "ASSET_CHANGED" ? "cambio de activo" : "datos inestables";
+      detail.textContent = `Cancelada (${reasonText})`;
+      detail.style.textDecoration = "line-through";
+    } else {
+      const entryP = Number.isFinite(sig.entryPrice) ? Number(sig.entryPrice).toFixed(5) : "---";
+      const closeP = Number.isFinite(sig.closePrice) ? Number(sig.closePrice).toFixed(5) : "---";
+      detail.textContent = `${entryP} → ${closeP}`;
+    }
 
-    row.append(time, badge, desc, prob, pnl);
+    const resBadge = document.createElement("span");
+    const res = isCancelled ? "CANCELADA" : (sig.result || sig.status || "PENDING");
+    const resClass = res === "WIN" || res === "GANADA" ? "WIN" : res === "LOSS" || res === "PERDIDA" ? "LOSS" : res === "DOJI" ? "DOJI" : "PENDING";
+    resBadge.className = `history-badge ${resClass}`;
+    resBadge.textContent = res;
+
+    row.append(time, pair, dirBadge, detail, resBadge);
     list.appendChild(row);
   });
 }
@@ -417,7 +435,7 @@ function renderLogs(logs = []) {
   if (!currentLogs.length) {
     const empty = document.createElement("p");
     empty.className = "logs-empty";
-    empty.textContent = "Esperando eventos do sistema…";
+    empty.textContent = "Esperando eventos del sistema…";
     list.appendChild(empty);
     return;
   }
@@ -452,6 +470,9 @@ function showOpenB2Notice() {
 
   const tfEl = document.getElementById("timeframe");
   if (tfEl) tfEl.textContent = "M1";
+
+  const winTag = document.getElementById("window-tag");
+  if (winTag) winTag.textContent = currentWindowLabel;
 
   const feedCopyEl = document.getElementById("feed-copy");
   if (feedCopyEl) feedCopyEl.textContent = "Sin datos";
@@ -490,15 +511,14 @@ function renderState(state = null, signals = [], logs = []) {
     playSoundList(sounds);
     lastLifecycle = nextLifecycle;
 
-    const currentTimerState = candleTimer.getState();
-
     // 1. Renderiza Card Visual de Sinal, Análise e Histórico
-    renderSignalCard(displayData, currentTimerState);
+    renderSignalCard(displayData);
     renderQuantAnalysis(displayData);
     renderSignalsHistory(signals);
     renderLogs(logs);
 
     // 2. Renderização dos elementos do Status Card
+    const currentTimerState = candleTimer.getState();
     const vm = createViewModel(displayData, displayData.candleTimer || currentTimerState || {}, { now: Date.now() });
     const copy = {
       CONECTANDO: "Activo · Buscando la transmisión…",
@@ -519,6 +539,9 @@ function renderState(state = null, signals = [], logs = []) {
 
     const tfEl = document.getElementById("timeframe");
     if (tfEl) tfEl.textContent = vm.timeframe || "M1";
+
+    const winTag = document.getElementById("window-tag");
+    if (winTag) winTag.textContent = currentWindowLabel;
 
     const feedCopyEl = document.getElementById("feed-copy");
     if (feedCopyEl) {
@@ -543,10 +566,14 @@ function renderState(state = null, signals = [], logs = []) {
     const techEl = document.getElementById("technical");
     if (techEl) techEl.textContent = vm.sistema?.technicalState || displayData.state || "BOOTING";
 
+    // P-03: Cria o WaveRenderer apenas uma vez e atualiza com setState
     const canvas = document.getElementById("side-wave");
     if (canvas) {
-      wave?.destroy();
-      wave = new WaveRenderer(canvas, { state: vm.wave });
+      if (!wave) {
+        wave = new WaveRenderer(canvas, { state: vm.wave });
+      } else {
+        wave.setState(vm.wave);
+      }
     }
   } catch (err) {
     console.error("[Inflitrus Sidepanel] Error rendering state:", err);
@@ -569,6 +596,7 @@ async function updateBoundContext() {
       const url = activeTab?.url || "";
       isBoundTabB2 = url.includes("b2trading.io");
     }
+    await updateWindowLabel();
   } catch (_) {}
 }
 
@@ -613,7 +641,7 @@ async function initSidepanel() {
     }
   });
 
-  // 1. Cronômetro M1 desacoplado atualizado a 250ms via localMarketClock
+  // 1. Cronômetro M1 desacoplado atualizado a 250ms via localMarketClock (T-06)
   setInterval(updateClockOnlyUI, 250);
   updateClockOnlyUI();
 
