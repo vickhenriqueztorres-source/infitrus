@@ -263,7 +263,6 @@ export class DiagnosticPanel {
   }
 
   update(newData = {}) {
-    if (newData.candleTimestamp) candleTimer.syncServerTime(newData.candleTimestamp);
     this.currentData = { ...this.currentData, ...newData };
     this.scheduleRender();
   }

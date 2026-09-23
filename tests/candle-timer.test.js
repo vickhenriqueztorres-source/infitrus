@@ -38,19 +38,16 @@ test("CandleTimer: Cálculo correto dos segundos restantes em M1 (60s)", () => {
   assert.equal(s59.phase, "EXECUTE");
   assert.equal(s59.isEntryWindow, true);
 
-  // No segundo 00 do minuto: virada de vela / abertura imediata
+  // No segundo 00 do minuto: abertura da vela passa a ser WAIT na etapa 02
   const s00 = timer.computeCurrentState(1727010060);
-  assert.equal(s00.phase, "EXECUTE");
-  assert.equal(s00.isEntryWindow, true);
+  assert.equal(s00.phase, "WAIT");
+  assert.equal(s00.isEntryWindow, false);
 });
 
-test("CandleTimer: Sincronização de tempo com o servidor e cálculo de progresso", () => {
+test("CandleTimer: Cálculo de progresso e estado baseado no tempo de mercado", () => {
   const timer = new CandleTimer({ timeframeSeconds: 60 });
   
-  // Sincroniza com timestamp do servidor
   const serverTimeSec = 1727010030; // Metade da vela
-  timer.syncServerTime(serverTimeSec);
-
   const state = timer.computeCurrentState(serverTimeSec);
   assert.equal(state.remainingSeconds, 30);
   assert.equal(state.progressPct, 50.0);

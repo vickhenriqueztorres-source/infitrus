@@ -1,9 +1,11 @@
 import { audioAlertManager } from "../utils/audio-alerts.js";
 import { candleTimer } from "../utils/candle-timer.js";
+import { MarketClock } from "../utils/market-clock.js";
 import { createViewModel } from "../ui/view-model.js";
 import { WaveRenderer } from "../ui/wave.js";
 import { translateLogMessage, translateLogTag } from "../ui/components/layout.js";
 
+const localMarketClock = new MarketClock();
 const NOTIFICATIONS_KEY = "ifx_notifications_v1";
 let wave;
 let currentLogs = [];
@@ -45,6 +47,29 @@ function switchMainTab(tabName) {
   // Ao alternar para o Sinal, redimensiona a onda se necessário
   if (tabName === "signal" && wave) {
     wave.start();
+  }
+}
+
+/**
+ * Atualiza o cronômetro M1 e a barra de contagem regressiva desacoplado via localMarketClock
+ */
+function updateClockOnlyUI() {
+  const remaining = localMarketClock.remainingInCandle(60);
+  const mins = Math.floor(remaining / 60);
+  const secs = remaining % 60;
+  const formattedTime = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  const progressPct = Number((((60 - remaining) / 60) * 100).toFixed(1));
+
+  const timerBadge = document.getElementById("signal-timer-badge");
+  if (timerBadge) {
+    timerBadge.textContent = formattedTime;
+    timerBadge.classList.toggle("warning", remaining <= 15 && remaining > 3);
+    timerBadge.classList.toggle("prepare", remaining <= 3);
+  }
+
+  const progressBar = document.getElementById("signal-progress-bar");
+  if (progressBar) {
+    progressBar.style.width = `${Math.min(100, Math.max(0, progressPct))}%`;
   }
 }
 
@@ -542,9 +567,11 @@ function renderState(globalData = {}, localTabState = null) {
     const displayData = symbols[activeKey] || (localTabState?.symbol === activeKey ? localTabState : null) || cachedState;
     renderAssetTabs(symbols, activeKey);
 
-    // Sincroniza o cronômetro com os dados recebidos
-    if (displayData.candleTimestamp) {
-      candleTimer.syncServerTime(displayData.candleTimestamp);
+    // Sincroniza o relógio de mercado com o offset recebido
+    if (displayData.clockOffsetMs !== undefined) {
+      localMarketClock.offsetMs = displayData.clockOffsetMs;
+    } else if (state?.clockOffsetMs !== undefined) {
+      localMarketClock.offsetMs = state.clockOffsetMs;
     }
     const currentTimerState = candleTimer.getState();
 
@@ -666,27 +693,9 @@ function initSidepanel() {
     }
   });
 
-  // 1. Inicia o cronômetro M1 e escuta bips e alertas
-  candleTimer.start();
-  candleTimer.subscribe((timerState) => {
-    updateCountdownUI(timerState);
-
-    // Toca bips 3, 2, 1 e Som de Entrada (0) se houver sinal ativo no par visualizado
-    const inDecisionWindow =
-      timerState.remainingSeconds <= 15 ||
-      timerState.phase === "WARNING" ||
-      timerState.phase === "PREPARE" ||
-      timerState.phase === "EXECUTE";
-    const act = inDecisionWindow ? (activeSignalData?.action || activeSignalData?.quantAction) : "WAIT";
-
-    if (inDecisionWindow && (act === "CALL" || act === "PUT")) {
-      if (timerState.remainingSeconds === 3 || timerState.remainingSeconds === 2 || timerState.remainingSeconds === 1) {
-        audioAlertManager.playCountdownPip(timerState.remainingSeconds);
-      } else if (timerState.remainingSeconds === 60 || (timerState.phase === "EXECUTE" && timerState.remainingSeconds <= 1)) {
-        audioAlertManager.playCountdownPip(0);
-      }
-    }
-  });
+  // 1. Cronômetro M1 desacoplado atualizado a 250ms via localMarketClock
+  setInterval(updateClockOnlyUI, 250);
+  updateClockOnlyUI();
 
   // Escuta sinais disparados em tempo real pelo runtime
   if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {

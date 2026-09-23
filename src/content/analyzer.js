@@ -25,6 +25,7 @@ import { signalAuditor } from "../strategy/signal-auditor.js";
 import { intraminuteTracker } from "../market/intraminute-tracker.js";
 import { audioAlertManager } from "../utils/audio-alerts.js";
 import { candleTimer } from "../utils/candle-timer.js";
+import { marketClock } from "../utils/market-clock.js";
 import { logger } from "../utils/logger.js";
 import { initBridgeListener } from "./bridge.js";
 import { DiagnosticPanel } from "./panel.js";
@@ -38,18 +39,8 @@ export class MarketAnalyzer {
     this._lastLoggedPrices = new Map();
     this.store = new CandleStore({ maxCandlesPerSeries: 500 });
 
-    // Inicia cronômetro da vela M1 e bips de preparação
+    // Inicia cronômetro da vela M1
     candleTimer.start();
-    this.unsubscribeTimer = candleTimer.subscribe((state) => {
-      const act = this.quantReport ? (this.quantReport.action || this.quantReport.quantAction || this.quantReport.signal) : "WAIT";
-      if (act === "CALL" || act === "PUT") {
-        if (state.remainingSeconds === 3 || state.remainingSeconds === 2 || state.remainingSeconds === 1) {
-          audioAlertManager.playCountdownPip(state.remainingSeconds);
-        } else if (state.remainingSeconds === 60 || (state.phase === "EXECUTE" && state.remainingSeconds <= 1)) {
-          audioAlertManager.playCountdownPip(0);
-        }
-      }
-    });
     this.quality = new DataQualityTracker({ staleTimeoutMs: 15000, minHistoryBars: 10 });
     this.strategy = new StrategyEngine({ emaFastPeriod: 9, emaSlowPeriod: 21, rsiPeriod: 14 });
     this.intraminuteTracker = intraminuteTracker;
@@ -216,7 +207,7 @@ export class MarketAnalyzer {
       const sym = candle.symbol || incomingSym;
       this.activeSymbols.add(sym);
 
-      // 1. Registra tick no IntraminuteTracker e sincroniza o cronômetro de vela M1
+      // 1. Registra tick no IntraminuteTracker
       this.intraminuteTracker.recordTick(
         sym,
         this.timeframeSeconds,
@@ -224,7 +215,6 @@ export class MarketAnalyzer {
         candle.timestamp,
         candle.receivedAt
       );
-      candleTimer.syncServerTime(candle.receivedAt || candle.timestamp);
 
       const result = this.store.ingest(candle);
       this.quality.onRealtimeUpdate(sym, this.timeframeSeconds, result);
@@ -236,6 +226,9 @@ export class MarketAnalyzer {
       }
 
       if (result.status === "NEW_CANDLE") {
+        if (sym === this.currentSymbol && this.timeframeSeconds === 60) {
+          marketClock.observeCandleOpen(candle.timestamp, candle.receivedAt);
+        }
         logger.success(
           "STORE",
           `Nova vela aberta em ${sym}. Fechamento anterior: ${result.closedCandle?.close?.toFixed(5)}`
@@ -453,8 +446,9 @@ export class MarketAnalyzer {
         signalReasons: qReport.reasons || [],
         executionMoment: "AT_CANDLE_OPEN",
         indicators: cSignal.indicators,
-        candleTimestamp: lastCandle?.timestamp || Math.floor(candleTimer.getEpochSeconds()),
+        candleTimestamp: lastCandle?.timestamp || Math.floor(marketClock.nowSec()),
         candleTimer: candleTimer.getState(),
+        clockOffsetMs: marketClock.offsetMs,
         isSoundEnabled: audioAlertManager.isSoundEnabled(),
         updatedAt: Date.now(),
       };
@@ -468,6 +462,7 @@ export class MarketAnalyzer {
       tabId: this.tabId,
       windowId: this.windowId,
       symbol: this.currentSymbol,
+      clockOffsetMs: marketClock.offsetMs,
       symbols: symbolsMap,
       allSymbols: Object.keys(symbolsMap),
     };

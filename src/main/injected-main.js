@@ -58,7 +58,7 @@
   const sessionId = "sess_" + Math.random().toString(36).substring(2, 12) + "_" + Date.now();
   window.__oracleSessionId = sessionId;
 
-  function dispatchToBridge(sourceType, eventData) {
+  function dispatchToBridge(sourceType, eventData, receivedAt = Date.now()) {
     if (!eventData || !eventData.payload) return;
     try {
       window.postMessage(
@@ -66,7 +66,7 @@
           type: "ORACLE_MAIN_MARKET_EVENT",
           sessionId,
           origin: window.location.origin,
-          receivedAt: Date.now(),
+          receivedAt: eventData.receivedAt || receivedAt,
           sourceType,
           url: eventData.url,
           payload: eventData.payload,
@@ -89,20 +89,20 @@
 
         // Suporte assíncrono para Blob
         if (rawData instanceof Blob) {
-          rawData.text().then((text) => processReceivedData(text)).catch(() => {});
+          rawData.text().then((text) => processReceivedData(text, receivedAt)).catch(() => {});
           return;
         }
 
         // Suporte para ArrayBuffer e TypedArrays
         if (rawData instanceof ArrayBuffer) {
           try {
-            processReceivedData(new TextDecoder("utf-8").decode(rawData));
+            processReceivedData(new TextDecoder("utf-8").decode(rawData), receivedAt);
           } catch (_) {}
           return;
         }
         if (ArrayBuffer.isView(rawData)) {
           try {
-            processReceivedData(new TextDecoder("utf-8").decode(rawData.buffer));
+            processReceivedData(new TextDecoder("utf-8").decode(rawData.buffer), receivedAt);
           } catch (_) {}
           return;
         }
@@ -147,8 +147,8 @@
             dispatchToBridge("websocket", {
               url: sanitizedUrl,
               payload: sanitizedPayload,
-              receivedAt: Date.now(),
-            });
+              receivedAt,
+            }, receivedAt);
           }
         } catch (err) {}
       }
@@ -186,8 +186,9 @@
       });
 
       OriginalWebSocket.prototype.addEventListener.call(ws, "message", (event) => {
+        const receivedAt = Date.now();
         try {
-          processReceivedData(event.data);
+          processReceivedData(event.data, receivedAt);
         } catch (e) {}
       });
 

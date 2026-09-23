@@ -3,15 +3,17 @@
  * Oracle Quant Signals
  *
  * Responsabilidade:
- * - Calcular em tempo real os segundos restantes até o início da próxima vela M1 (60s).
- * - Sincronizar com o epoch dos ticks recebidos da corretora para eliminar defasagens do relógio local.
+ * - Calcular em tempo real os segundos restantes até o início da próxima vela M1 (60s) usando marketClock.
  * - Fornecer estados de alerta por fases:
+ *     - WAIT: segundo 0 (abertura da vela, aguardando início do ciclo)
  *     - NORMAL: > 10s restantes (análise contínua)
  *     - WARNING: 10s a 4s restantes (atenção para fechamento)
  *     - PREPARE: 3s a 1s restantes (prepare a ordem CALL/PUT)
- *     - EXECUTE: 0s / virada da vela (abertura imediata da operação)
+ *     - EXECUTE: <= 1s restantes (abertura iminente da operação)
  * - Notificar assinantes a cada segundo de forma não-bloqueante.
  */
+
+import { marketClock } from "./market-clock.js";
 
 export class CandleTimer {
   /**
@@ -20,7 +22,6 @@ export class CandleTimer {
    */
   constructor(options = {}) {
     this.timeframeSeconds = options.timeframeSeconds || 60;
-    this.serverOffsetMs = 0;
     this.listeners = new Set();
     this.timerId = null;
     this.lastSecondEmitted = -1;
@@ -29,30 +30,18 @@ export class CandleTimer {
       remainingSeconds: 60,
       formattedTime: "01:00",
       progressPct: 0,
-      phase: "NORMAL", // 'NORMAL' | 'WARNING' | 'PREPARE' | 'EXECUTE'
+      phase: "NORMAL",
       isEntryWindow: false,
       epoch: 0,
     };
   }
 
   /**
-   * Sincroniza o relógio interno com o timestamp do servidor da corretora.
-   * @param {number} serverEpochSeconds - Timestamp epoch da Deriv/B2Trading em segundos ou ms
-   */
-  syncServerTime(serverEpochSeconds) {
-    if (!serverEpochSeconds || isNaN(serverEpochSeconds)) return;
-    const epochSec = serverEpochSeconds > 1e11 ? serverEpochSeconds / 1000 : serverEpochSeconds;
-    const nowMs = Date.now();
-    this.serverOffsetMs = epochSec * 1000 - nowMs;
-    this.computeCurrentState();
-  }
-
-  /**
-   * Retorna o timestamp epoch atual estimado em segundos (corrigido com o offset do servidor).
+   * Retorna o timestamp epoch atual estimado em segundos (via marketClock).
    * @returns {number}
    */
   getEpochSeconds() {
-    return (Date.now() + this.serverOffsetMs) / 1000;
+    return marketClock.nowSec();
   }
 
   /**
@@ -61,18 +50,30 @@ export class CandleTimer {
    * @returns {Object}
    */
   computeCurrentState(targetEpoch = null) {
-    const epoch = targetEpoch !== null ? targetEpoch : this.getEpochSeconds();
     const tf = this.timeframeSeconds;
+    let secInTf;
+    let remaining;
+    let epoch;
 
-    const currentSecInTf = Math.floor(epoch) % tf;
-    let remaining = tf - currentSecInTf;
+    if (targetEpoch !== null) {
+      epoch = targetEpoch;
+      secInTf = Math.floor(epoch) % tf;
+      remaining = tf - secInTf;
+    } else {
+      epoch = marketClock.nowSec();
+      secInTf = marketClock.secondInCandle(tf);
+      remaining = marketClock.remainingInCandle(tf);
+    }
 
-    // Se remaining == tf, acabou de abrir no segundo 0
-    let isBoundary = currentSecInTf === 0;
+    const isBoundary = secInTf === 0;
     let phase = "NORMAL";
     let isEntryWindow = false;
 
-    if (isBoundary || remaining <= 1) {
+    // Segundo 0 passa a ser "WAIT" (a etapa 04 troca as fases visuais pelo ciclo de vida do sinal)
+    if (isBoundary) {
+      phase = "WAIT";
+      isEntryWindow = false;
+    } else if (remaining <= 1) {
       phase = "EXECUTE";
       isEntryWindow = true;
     } else if (remaining <= 3) {
@@ -101,7 +102,7 @@ export class CandleTimer {
   }
 
   /**
-   * Inicia o loop do cronômetro (atualização a cada 250ms para precisão de virada de segundo).
+   * Inicia o loop do cronômetro (atualização a cada 250ms).
    */
   start() {
     if (this.timerId) return;

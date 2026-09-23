@@ -7,6 +7,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { CandleTimer } from "../src/utils/candle-timer.js";
+import { marketClock } from "../src/utils/market-clock.js";
 import { SignalAuditor } from "../src/strategy/signal-auditor.js";
 import { RegimeChangeDetector } from "../src/strategy/adaptation/regime-change-detector.js";
 import { QuantPortfolio } from "../src/strategy/quant-portfolio.js";
@@ -16,7 +17,6 @@ import { generateCandles } from "./mock-data-helper.js";
 // Use um relógio falso: agora = abertura + 29,3 s → remainingSeconds tem de ser 31.
 test(
   "Caso 1 (ETAPA 02) — T-01: sincronização do CandleTimer com abertura não trava em remaining=60",
-  { skip: "desbloqueado na ETAPA 02" },
   () => {
     const timer = new CandleTimer({ timeframeSeconds: 60 });
     const candleOpen = 1727010000; // Segundos (abertura da vela)
@@ -26,8 +26,9 @@ test(
     const origNow = Date.now;
     try {
       Date.now = () => fakeNowMs;
-      // Código atual chama syncServerTime passando o timestamp da abertura da vela
-      timer.syncServerTime(candleOpen);
+      marketClock.offsetMs = 0;
+      marketClock.samples = 0;
+      marketClock.observeCandleOpen(candleOpen, candleOpen * 1000);
       const state = timer.computeCurrentState();
       assert.equal(state.remainingSeconds, 31, `Esperava 31s restantes, obtido: ${state.remainingSeconds}`);
     } finally {
