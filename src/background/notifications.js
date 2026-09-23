@@ -1,42 +1,81 @@
-const NOTIFICATIONS_KEY = "ifx_notifications_v1";
-const LAST_NOTIFICATION_KEY = "ifx_last_notification_id";
+/**
+ * notifications.js - Notificações e Badges por Aba no Background Service Worker
+ * Oracle Quant Signals
+ *
+ * Responsabilidade:
+ * - Gerenciar badges de ícone da extensão EXCLUSIVAMENTE vinculados ao tabId da aba (I-06, I-07).
+ * - Exibir notificações nativas do Chrome apenas em transições PRE_SIGNAL e ENTRY_NOW.
+ * - Deduplicar notificações por ${signal.id}:${fase} via chrome.storage.session.
+ */
 
-function getStorage(keys) {
-  return new Promise((resolve) => chrome.storage.local.get(keys, (value) => resolve(value || {})));
-}
+/**
+ * Trata mudança de estado de uma aba específica e atualiza badge e notificações.
+ *
+ * @param {number} tabId
+ * @param {Object} newState
+ * @param {Object} [oldState]
+ */
+export async function handleTabStateChange(tabId, newState, oldState = null) {
+  if (!tabId || !newState) return;
 
-async function notifySignal(signal) {
-  if (!signal?.id || !["CALL", "PUT"].includes(signal.direction)) return;
-  const ageMs = Date.now() - Number(signal.recordedAt || 0);
-  if (ageMs < 0 || ageMs > 5000 || Number(signal.validRemainingSec) <= 0) return;
-  const stored = await getStorage([NOTIFICATIONS_KEY, LAST_NOTIFICATION_KEY]);
-  if (stored[NOTIFICATIONS_KEY] === false || stored[LAST_NOTIFICATION_KEY] === signal.id) return;
-  const arrow = signal.direction === "CALL" ? "▲" : "▼";
-  await chrome.notifications.create(`inflitrus-${signal.id}`, {
-    type: "basic",
-    iconUrl: chrome.runtime.getURL("assets/icons/icon-128.png"),
-    title: `Señal interceptada · ${signal.direction} ${arrow}`,
-    message: `${signal.asset} · ${signal.timeframe} · Entrada en la apertura de la próxima vela`,
-    priority: 2,
-  });
-  chrome.storage.local.set({ [LAST_NOTIFICATION_KEY]: signal.id });
-}
+  const lc = newState.lifecycle;
+  const activeSignal = lc?.trade || lc?.current;
 
-function updateBadge(message) {
-  if (message.visualState === "SENAL" && message.signalPhase === "live") {
-    chrome.action.setBadgeText({ text: "•" });
-    chrome.action.setBadgeBackgroundColor({ color: "#3FE0C5" });
-  } else if (message.visualState === "BLOQUEADO" || message.visualState === "CALIBRANDO" || message.visualState === "CONECTANDO") {
-    chrome.action.setBadgeText({ text: "•" });
-    chrome.action.setBadgeBackgroundColor({ color: "#F2A93B" });
-  } else {
-    chrome.action.setBadgeText({ text: "" });
+  // 1. Badge estritamente vinculado ao tabId (NUNCA global sem tabId)
+  if (globalThis.chrome?.action?.setBadgeText) {
+    if (activeSignal && (activeSignal.phase === "PRE_SIGNAL" || activeSignal.phase === "ENTRY_NOW")) {
+      const text = activeSignal.direction === "CALL" ? "▲" : "▼";
+      const color = activeSignal.direction === "CALL" ? "#00D696" : "#FF3B69";
+      try {
+        globalThis.chrome.action.setBadgeText({ tabId, text });
+        if (globalThis.chrome.action.setBadgeBackgroundColor) {
+          globalThis.chrome.action.setBadgeBackgroundColor({ tabId, color });
+        }
+      } catch (_) {}
+    } else {
+      try {
+        globalThis.chrome.action.setBadgeText({ tabId, text: "" });
+      } catch (_) {}
+    }
   }
-}
 
-export function registerNotifications() {
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === "IFX_SIGNAL") notifySignal(message.signal).catch(() => {});
-    if (message?.type === "IFX_UI_STATE") updateBadge(message);
-  });
+  // 2. Notificações apenas em PRE_SIGNAL e ENTRY_NOW
+  if (!activeSignal || !["PRE_SIGNAL", "ENTRY_NOW"].includes(activeSignal.phase)) return;
+  const dedupKey = `notif:${activeSignal.id}:${activeSignal.phase}`;
+
+  let alreadyNotified = false;
+  try {
+    if (globalThis.chrome?.storage?.session) {
+      const sess = await globalThis.chrome.storage.session.get([dedupKey]);
+      if (sess && sess[dedupKey]) {
+        alreadyNotified = true;
+      } else {
+        await globalThis.chrome.storage.session.set({ [dedupKey]: true });
+      }
+    }
+  } catch (_) {}
+
+  if (alreadyNotified) return;
+
+  const pair = activeSignal.pair || newState.symbol || "Mercado";
+  const dir = activeSignal.direction;
+  const arrow = dir === "CALL" ? "▲" : "▼";
+  const winIdStr = newState.windowId ? `[Ventana ${newState.windowId}] ` : "";
+
+  const title = `${pair} · ${dir} ${arrow}`;
+  const message = activeSignal.phase === "ENTRY_NOW"
+    ? `${winIdStr}¡Entra ahora en ${pair} (${dir})!`
+    : `${winIdStr}Pre-señal en ${pair}. Entrada al abrir la próxima vela.`;
+
+  if (globalThis.chrome?.notifications?.create) {
+    try {
+      await globalThis.chrome.notifications.create(`ifx-${activeSignal.id}-${activeSignal.phase}`, {
+        type: "basic",
+        iconUrl: globalThis.chrome.runtime?.getURL?.("assets/icons/icon-128.png") || "",
+        title,
+        message,
+        priority: 2,
+      });
+    } catch (_) {}
+  }
 }

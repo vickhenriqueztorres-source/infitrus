@@ -1,25 +1,27 @@
 import { audioAlertManager } from "../utils/audio-alerts.js";
 import { createViewModel } from "../ui/view-model.js";
 import { WaveRenderer } from "../ui/wave.js";
+import { selectTabView } from "../ui/tab-view-selector.js";
 
 const ACTIVE_KEY = "ifx_active_v1";
 const NOTIFICATIONS_KEY = "ifx_notifications_v1";
 let wave;
+let boundTabId = null;
+let boundWindowId = null;
 
 function getStorage(keys) {
-  return new Promise((resolve) => chrome.storage.local.get(keys, (result) => resolve(result || {})));
+  return new Promise((resolve) => {
+    if (!globalThis.chrome?.storage?.local) return resolve({});
+    chrome.storage.local.get(keys, (result) => resolve(result || {}));
+  });
 }
 
-function sendToB2Tabs(message) {
-  chrome.tabs.query({ url: ["https://traderoom.b2trading.io/*", "https://chart.b2trading.io/*"] }, (tabs) => {
-    tabs.forEach((tab) => {
-      if (tab.id == null) return;
-      try {
-        const pending = chrome.tabs.sendMessage(tab.id, message);
-        pending?.catch?.(() => {});
-      } catch (_) {}
-    });
-  });
+function sendToBoundTab(message) {
+  if (boundTabId == null) return;
+  try {
+    const pending = chrome.tabs.sendMessage(boundTabId, message);
+    pending?.catch?.(() => {});
+  } catch (_) {}
 }
 
 function renderState(data = {}) {
@@ -30,46 +32,113 @@ function renderState(data = {}) {
     ESCANEANDO: "Activo · Escuchando el mercado…",
     SENAL: "Activo · Frecuencia fijada.",
     BLOQUEADO: "Activo · Datos bloqueados.",
-  }[vm.visualState];
-  document.getElementById("status-copy").textContent = stateCopy;
-  document.getElementById("asset").textContent = vm.asset;
-  document.getElementById("timeframe").textContent = vm.timeframe;
-  document.getElementById("feed-copy").textContent = vm.context.feed === "Estable" ? "Datos estables" : vm.context.feed === "Sin datos" ? "Sin datos" : "Datos inestables";
+  }[vm.visualState] || "Activo · Observador Quant";
+
+  const copyEl = document.getElementById("status-copy");
+  if (copyEl) copyEl.textContent = stateCopy;
+
+  const assetEl = document.getElementById("asset");
+  if (assetEl) assetEl.textContent = vm.asset;
+
+  const tfEl = document.getElementById("timeframe");
+  if (tfEl) tfEl.textContent = vm.timeframe;
+
+  const feedCopy = document.getElementById("feed-copy");
+  if (feedCopy) {
+    feedCopy.textContent = vm.context?.feed === "Estable" ? "Datos estables" : vm.context?.feed === "Sin datos" ? "Sin datos" : "Datos inestables";
+  }
+
   const statusDot = document.getElementById("status-dot");
-  statusDot.className = `dot ${vm.statusDot}`;
+  if (statusDot) statusDot.className = `dot ${vm.statusDot || "amber"}`;
+
   const feedDot = document.getElementById("feed-dot");
-  feedDot.className = `dot ${vm.context.feed === "Estable" ? "teal" : "amber"}`;
+  if (feedDot) feedDot.className = `dot ${vm.context?.feed === "Estable" ? "teal" : "amber"}`;
+
   wave?.destroy();
-  wave = new WaveRenderer(document.getElementById("popup-wave"), { state: vm.wave });
+  const canvas = document.getElementById("popup-wave");
+  if (canvas) {
+    wave = new WaveRenderer(canvas, { state: vm.wave });
+  }
+}
+
+async function refreshPopupState() {
+  if (!boundTabId) return;
+  const stateKey = `ifx:tab:${boundTabId}:state`;
+  const soundKey = boundWindowId ? `ifx:window:${boundWindowId}:sound` : null;
+  const keys = [stateKey, ACTIVE_KEY, NOTIFICATIONS_KEY];
+  if (soundKey) keys.push(soundKey);
+
+  const stored = await getStorage(keys);
+  if (soundKey && stored[soundKey] !== undefined) {
+    audioAlertManager.setSoundEnabled(Boolean(stored[soundKey]));
+    const soundToggle = document.getElementById("sound-toggle");
+    if (soundToggle) soundToggle.checked = Boolean(stored[soundKey]);
+  }
+  const view = selectTabView(stored, boundTabId);
+  renderState(view.state || {});
 }
 
 async function initialize() {
-  const stored = await getStorage(["oracleMarketState", "oracle_sound_enabled", ACTIVE_KEY, NOTIFICATIONS_KEY]);
-  document.getElementById("active-toggle").checked = stored[ACTIVE_KEY] !== false;
-  document.getElementById("sound-toggle").checked = stored.oracle_sound_enabled === undefined ? audioAlertManager.isSoundEnabled() : Boolean(stored.oracle_sound_enabled);
-  document.getElementById("notification-toggle").checked = stored[NOTIFICATIONS_KEY] !== false;
-  renderState(stored.oracleMarketState || {});
+  try {
+    if (typeof chrome !== "undefined" && chrome.windows?.getCurrent) {
+      const currentWin = await chrome.windows.getCurrent();
+      boundWindowId = currentWin?.id || null;
+      if (boundWindowId && chrome.tabs?.query) {
+        const tabs = await chrome.tabs.query({ active: true, windowId: boundWindowId });
+        boundTabId = tabs?.[0]?.id || null;
+      }
+    }
+  } catch (_) {}
 
-  document.getElementById("active-toggle").addEventListener("change", (event) => {
+  const soundKey = boundWindowId ? `ifx:window:${boundWindowId}:sound` : null;
+  const stored = await getStorage([ACTIVE_KEY, NOTIFICATIONS_KEY, ...(soundKey ? [soundKey] : [])]);
+  const activeToggle = document.getElementById("active-toggle");
+  if (activeToggle) activeToggle.checked = stored[ACTIVE_KEY] !== false;
+
+  const soundToggle = document.getElementById("sound-toggle");
+  if (soundToggle) {
+    soundToggle.checked = soundKey && stored[soundKey] !== undefined ? Boolean(stored[soundKey]) : audioAlertManager.isSoundEnabled();
+  }
+
+  const notifToggle = document.getElementById("notification-toggle");
+  if (notifToggle) notifToggle.checked = stored[NOTIFICATIONS_KEY] !== false;
+
+  await refreshPopupState();
+
+  activeToggle?.addEventListener("change", (event) => {
     chrome.storage.local.set({ [ACTIVE_KEY]: event.target.checked });
-    sendToB2Tabs({ type: "ORACLE_TOGGLE_PANEL" });
+    sendToBoundTab({ type: "ORACLE_TOGGLE_PANEL" });
   });
-  document.getElementById("sound-toggle").addEventListener("change", (event) => {
-    audioAlertManager.setSoundEnabled(event.target.checked);
+
+  soundToggle?.addEventListener("change", (event) => {
+    const enabled = event.target.checked;
+    audioAlertManager.setSoundEnabled(enabled);
+    if (soundKey) {
+      chrome.storage.local.set({ [soundKey]: enabled });
+    }
   });
-  document.getElementById("notification-toggle").addEventListener("change", (event) => {
+
+  notifToggle?.addEventListener("change", (event) => {
     chrome.storage.local.set({ [NOTIFICATIONS_KEY]: event.target.checked });
   });
-  document.getElementById("open-traderoom").addEventListener("click", () => {
+
+  document.getElementById("open-traderoom")?.addEventListener("click", () => {
     chrome.tabs.query({ url: "https://traderoom.b2trading.io/*" }, (tabs) => {
       if (tabs[0]?.id != null) chrome.tabs.update(tabs[0].id, { active: true });
       else chrome.tabs.create({ url: "https://traderoom.b2trading.io/" });
       window.close();
     });
   });
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes.oracleMarketState?.newValue) renderState(changes.oracleMarketState.newValue);
-  });
+
+  if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local" || !boundTabId) return;
+      const tabStateKey = `ifx:tab:${boundTabId}:state`;
+      if (changes[tabStateKey]?.newValue) {
+        renderState(changes[tabStateKey].newValue);
+      }
+    });
+  }
 }
 
 document.addEventListener("DOMContentLoaded", initialize);

@@ -26,7 +26,6 @@ import { ActiveChannel } from "../market/active-channel.js";
 import { LIFECYCLE } from "../strategy/lifecycle-config.js";
 import { signalAuditor } from "../strategy/signal-auditor.js";
 import { intraminuteTracker } from "../market/intraminute-tracker.js";
-import { audioAlertManager } from "../utils/audio-alerts.js";
 import { candleTimer } from "../utils/candle-timer.js";
 import { marketClock } from "../utils/market-clock.js";
 import { logger } from "../utils/logger.js";
@@ -100,29 +99,9 @@ export class MarketAnalyzer {
           "SINAL",
           `🚀 PRE-SEÑAL M1 [${lc.direction} ${lc.pair} - ${lc.snapshot?.subStrategy || "Quant"}]: Prob: ${((lc.snapshot?.probability || 0.5) * 100).toFixed(1)}% | Entrada no início da próxima vela`
         );
-        if (lc.direction === "CALL") audioAlertManager.playCallAlert();
-        else if (lc.direction === "PUT") audioAlertManager.playPutAlert();
-
-        if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-          try {
-            chrome.runtime.sendMessage({
-              type: "ORACLE_NEW_SIGNAL",
-              signal: {
-                id: lc.id,
-                action: lc.direction,
-                symbol: lc.pair,
-                timeframeSeconds: lc.tf,
-                candleTimestamp: lc.formingTs,
-                targetTimestamp: lc.targetTs,
-                probability: lc.snapshot?.probability ?? 0.5,
-                tabId: this.tabId,
-              },
-            }).catch(() => {});
-          } catch (_) {}
-        }
-        this.updatePanelDisplay();
+        this.updatePanelDisplay({ immediate: true });
       } else if (event === Phase.ENTRY_NOW || event === Phase.IN_TRADE) {
-        this.updatePanelDisplay();
+        this.updatePanelDisplay({ immediate: true });
       } else if (event === Phase.SETTLED) {
         this.signalAuditor.settle(lc.id, {
           result: lc.result,
@@ -132,10 +111,10 @@ export class MarketAnalyzer {
         if (lc.result === "WIN" || lc.result === "LOSS") {
           this.registry.get(lc.pair).recordOutcome(lc.snapshot, lc.result === "WIN");
         }
-        this.updatePanelDisplay();
+        this.updatePanelDisplay({ immediate: true });
       } else if (event === Phase.CANCELLED) {
         this.signalAuditor.cancel(lc.id, lc.reason);
-        this.updatePanelDisplay();
+        this.updatePanelDisplay({ immediate: true });
       }
     });
     this.quantReport = {
@@ -182,7 +161,11 @@ export class MarketAnalyzer {
           if (info) {
             this.tabId = info.tabId || null;
             this.windowId = info.windowId || null;
+            if (this.tabId) {
+              this.signalAuditor.setTabId(this.tabId);
+            }
             logger.setContext({ tabId: this.tabId, symbol: this.currentSymbol });
+            this.updatePanelDisplay({ immediate: true });
           }
         });
       } catch (_) {}
@@ -207,14 +190,18 @@ export class MarketAnalyzer {
       }, 250);
     }
 
-    // 3. Listener seguro para alteração de payout via Side Panel (I-05)
+    // 3. Listener seguro para alteração de payout e vinculação de janela via Background/Side Panel (I-01, I-05)
     if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener((msg, sender) => {
         if (sender && sender.id !== chrome.runtime.id) return;
+        if (msg && msg.type === "ORACLE_TAB_ATTACHED" && msg.windowId) {
+          this.windowId = msg.windowId;
+          this.updatePanelDisplay({ immediate: true });
+        }
         if (msg && msg.type === "ORACLE_SET_PAYOUT" && msg.payout) {
           this.payout = msg.payout;
           this.registry.setGlobalPayout(msg.payout);
-          this.updatePanelDisplay();
+          this.updatePanelDisplay({ immediate: true });
         }
       });
     }
@@ -490,12 +477,12 @@ export class MarketAnalyzer {
         isStale: report.state === MarketState.STALE,
       });
 
-      const cSignal = this.strategy.evaluate({
+      const cSignal = this.strategy?.evaluate ? this.strategy.evaluate({
         symbol: sym,
         timeframeSeconds: this.timeframeSeconds,
         candles: closedCandles,
         isReady,
-      });
+      }) : { indicators: {} };
 
       let lastTimeStr = "--:--:--";
       if (lastCandle && lastCandle.timestamp) {
@@ -522,6 +509,7 @@ export class MarketAnalyzer {
         frameStatus: typeof window !== "undefined" && window !== window.top ? "iframe conectado" : "conectado",
         wsStatus: this.socketStatus,
         symbol: sym,
+        pair: sym,
         action: displayAction,
         rawAction: qReport.action,
         strategyName: qReport.strategyName,
@@ -529,11 +517,13 @@ export class MarketAnalyzer {
         correlationGroup: qReport.correlationGroup,
         timeframe: `${this.timeframeSeconds / 60} minuto(s)`,
         timeframeSeconds: this.timeframeSeconds,
+        tf: this.timeframeSeconds,
         historyCount: closedCandles.length,
         lastCandleTime: lastTimeStr,
         lastPrice: symPrice,
         gaps: report.gapCount,
         state: isReady ? MarketState.READY : report.state,
+        status: isReady ? MarketState.READY : report.state,
         lifecycle,
         quantAction: displayAction,
         quantLabel: displayLabel,
@@ -556,11 +546,11 @@ export class MarketAnalyzer {
         signalLabel: displayLabel,
         signalReasons: qReport.reasons || [],
         executionMoment: "AT_CANDLE_OPEN",
-        indicators: cSignal.indicators,
+        indicators: cSignal?.indicators || {},
         candleTimestamp: lastCandle?.timestamp || Math.floor(marketClock.nowSec()),
         candleTimer: candleTimer.getState(),
         clockOffsetMs: marketClock.offsetMs,
-        isSoundEnabled: audioAlertManager.isSoundEnabled(),
+        isSoundEnabled: true,
         updatedAt: Date.now(),
       };
     }
@@ -573,76 +563,61 @@ export class MarketAnalyzer {
       tabId: this.tabId,
       windowId: this.windowId,
       symbol: this.currentSymbol,
+      pair: this.currentSymbol,
+      tf: this.timeframeSeconds,
+      status: activeObj.state || "BOOTING",
       clockOffsetMs: marketClock.offsetMs,
       symbols: symbolsMap,
       allSymbols: Object.keys(symbolsMap),
+      updatedAt: Date.now(),
     };
 
     if (this.panel) {
       this.panel.update(stateObj);
     }
 
-    this.saveMarketStateToStorage(stateObj, symbolsMap);
+    this.saveMarketStateToStorage(stateObj, { immediate });
   }
 
-  saveMarketStateToStorage(stateObj, symbolsMap = {}) {
-    if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+  saveMarketStateToStorage(stateObj, { immediate = false } = {}) {
+    if (typeof chrome === "undefined" || !chrome.storage?.local || !this.tabId) return;
+
+    const payload = {
+      ...stateObj,
+      tabId: this.tabId,
+      windowId: this.windowId,
+      pair: this.currentSymbol,
+      symbol: this.currentSymbol,
+      tf: this.timeframeSeconds,
+      status: stateObj.state || "BOOTING",
+      clockOffsetMs: marketClock.offsetMs,
+      updatedAt: Date.now(),
+    };
+
+    const now = Date.now();
+    if (!immediate && this._lastStateSaveTime && (now - this._lastStateSaveTime < 250)) {
+      this._latestStateToSave = payload;
+      if (!this._pendingStateSaveTimeout) {
+        this._pendingStateSaveTimeout = setTimeout(() => {
+          this._pendingStateSaveTimeout = null;
+          this.saveMarketStateToStorage(this._latestStateToSave, { immediate: false });
+        }, 250 - (now - this._lastStateSaveTime));
+      }
+      return;
+    }
+
+    if (this._pendingStateSaveTimeout) {
+      clearTimeout(this._pendingStateSaveTimeout);
+      this._pendingStateSaveTimeout = null;
+    }
+    this._lastStateSaveTime = now;
+    this._latestStateToSave = null;
 
     try {
-      const currentSym = stateObj.symbol || this.currentSymbol;
-
-      // 1. Grava no storage isolado exclusivo desta aba (se tabId estiver identificado)
-      if (this.tabId) {
-        chrome.storage.local.set({
-          [`oracleMarketState_tab_${this.tabId}`]: {
-            ...stateObj,
-            tabId: this.tabId,
-            windowId: this.windowId,
-          },
-        });
-      }
-
-      // 2. Mescla no estado compartilhado com isolamento por aba e símbolo
-      chrome.storage.local.get(["oracleMarketState"], (res) => {
-        const prev = res?.oracleMarketState || {};
-        const prevSymbols = prev.symbols || {};
-        const prevTabs = prev.tabs || {};
-
-        const mergedSymbols = {
-          ...prevSymbols,
-          ...symbolsMap,
-          [currentSym]: {
-            ...(prevSymbols[currentSym] || {}),
-            ...stateObj,
-            symbol: currentSym,
-          },
-        };
-
-        const mergedTabs = { ...prevTabs };
-        if (this.tabId) {
-          mergedTabs[this.tabId] = {
-            tabId: this.tabId,
-            windowId: this.windowId,
-            symbol: currentSym,
-            lastPrice: stateObj.lastPrice || "---",
-            state: stateObj.state || "BOOTING",
-            updatedAt: Date.now(),
-          };
-        }
-
-        const mergedState = {
-          ...prev,
-          // Mantém símbolo ativo anterior ou o atual caso não haja
-          symbol: prev.symbol || currentSym,
-          symbols: mergedSymbols,
-          allSymbols: Object.keys(mergedSymbols),
-          tabs: mergedTabs,
-          lastUpdatedTab: this.tabId || prev.lastUpdatedTab,
-        };
-
-        chrome.storage.local.set({ oracleMarketState: mergedState });
+      chrome.storage.local.set({
+        [`ifx:tab:${this.tabId}:state`]: payload,
       });
-    } catch (e) {}
+    } catch (_) {}
   }
 
   get quantPortfolio() {

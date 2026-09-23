@@ -4,7 +4,6 @@
  */
 
 import { logger } from "../utils/logger.js";
-import { audioAlertManager } from "../utils/audio-alerts.js";
 import { candleTimer } from "../utils/candle-timer.js";
 import { createViewModel } from "../ui/view-model.js";
 import { loadPanelFonts } from "../ui/fonts.js";
@@ -43,7 +42,7 @@ export class DiagnosticPanel {
     this.debugState = null;
     this.onboardingComplete = true;
     this.onboardingStep = 0;
-    this.isSoundEnabled = audioAlertManager.isSoundEnabled();
+    this.isSoundEnabled = true;
     this.timerState = candleTimer.getState();
     this.logs = logger.getLogs();
     this.renderTimer = 0;
@@ -88,10 +87,6 @@ export class DiagnosticPanel {
     if (globalThis.chrome?.storage?.onChanged) {
       chrome.storage.onChanged.addListener((changes, areaName) => {
         if (areaName !== "local") return;
-        if (Array.isArray(changes.oracle_logs?.newValue)) {
-          this.logs = changes.oracle_logs.newValue;
-          if (this.openTab === "system") this.scheduleRender();
-        }
         if (changes.oracle_sound_enabled) {
           this.isSoundEnabled = Boolean(changes.oracle_sound_enabled.newValue);
           this.scheduleRender();
@@ -114,17 +109,13 @@ export class DiagnosticPanel {
     this.setupMessageListener();
 
     const [stored, onboardingComplete, styles] = await Promise.all([
-      storageGet([POSITION_KEY, "oracle_sound_enabled", "oracle_logs"]),
+      storageGet([POSITION_KEY, "oracle_sound_enabled"]),
       readOnboardingState(),
       this.loadStyles(),
     ]);
     const position = stored?.[POSITION_KEY] || {};
     this.collapsed = Boolean(position.collapsed);
-    this.isSoundEnabled = stored.oracle_sound_enabled === undefined ? audioAlertManager.isSoundEnabled() : Boolean(stored.oracle_sound_enabled);
-    if (Array.isArray(stored.oracle_logs) && stored.oracle_logs.length) {
-      const currentIds = new Set(this.logs.map((entry) => entry.id));
-      this.logs = [...stored.oracle_logs.filter((entry) => !currentIds.has(entry.id)), ...this.logs].slice(-80);
-    }
+    this.isSoundEnabled = stored.oracle_sound_enabled === undefined ? true : Boolean(stored.oracle_sound_enabled);
     this.onboardingComplete = onboardingComplete;
     await loadPanelFonts({ debug: this.debug });
 
@@ -218,7 +209,8 @@ export class DiagnosticPanel {
       this.persistPosition();
     }
     if (action === "toggle-sound") {
-      this.isSoundEnabled = audioAlertManager.toggleSound();
+      this.isSoundEnabled = !this.isSoundEnabled;
+      storageSet({ oracle_sound_enabled: this.isSoundEnabled });
       this.settingsOpen = false;
     }
     if (action === "toggle-payout") this.payoutOpen = !this.payoutOpen;

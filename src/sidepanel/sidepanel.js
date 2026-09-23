@@ -4,31 +4,27 @@ import { MarketClock } from "../utils/market-clock.js";
 import { createViewModel } from "../ui/view-model.js";
 import { WaveRenderer } from "../ui/wave.js";
 import { translateLogMessage, translateLogTag } from "../ui/components/layout.js";
+import { selectTabView } from "../ui/tab-view-selector.js";
+import { soundsForTransition } from "../ui/sound-transitions.js";
 
 const localMarketClock = new MarketClock();
 const NOTIFICATIONS_KEY = "ifx_notifications_v1";
 let wave;
 let currentLogs = [];
-let currentTabId = null;
-let currentWindowId = null;
-let windowLockedSymbol = null;
-let selectedSymbol = null;
-let cachedState = {};
-let cachedTabState = null;
+let boundTabId = null;
+let boundWindowId = null;
+let isBoundTabB2 = false;
 let activeMainTab = "signal"; // 'signal' | 'quant' | 'logs'
 let activeSignalData = null;
-let lastAlertedCandleTs = null;
+let lastLifecycle = null;
+const playedSoundSet = new Set();
 
-function sendToB2Tabs(message) {
-  chrome.tabs.query({ url: ["https://traderoom.b2trading.io/*", "https://chart.b2trading.io/*"] }, (tabs) => {
-    tabs.forEach((tab) => {
-      if (tab.id == null) return;
-      try {
-        const pending = chrome.tabs.sendMessage(tab.id, message);
-        pending?.catch?.(() => {});
-      } catch (_) {}
-    });
-  });
+function sendToBoundTab(message) {
+  if (boundTabId == null) return;
+  try {
+    const pending = chrome.tabs.sendMessage(boundTabId, message);
+    pending?.catch?.(() => {});
+  } catch (_) {}
 }
 
 /**
@@ -51,10 +47,24 @@ function switchMainTab(tabName) {
 }
 
 /**
+ * Reproduz lista de efeitos sonoros
+ */
+function playSoundList(sounds = []) {
+  if (!sounds || !sounds.length) return;
+  for (const s of sounds) {
+    if (s === "call") audioAlertManager.playCallAlert();
+    else if (s === "put") audioAlertManager.playPutAlert();
+    else if (s === "pip") audioAlertManager.playCountdownPip(1);
+    else if (s === "entry") audioAlertManager.playCountdownPip(0);
+  }
+}
+
+/**
  * Atualiza o cronômetro M1 e a barra de contagem regressiva desacoplado via localMarketClock
  */
 function updateClockOnlyUI() {
   const remaining = localMarketClock.remainingInCandle(60);
+  const sec = localMarketClock.secondInCandle(60);
   const mins = Math.floor(remaining / 60);
   const secs = remaining % 60;
   const formattedTime = `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
@@ -70,6 +80,12 @@ function updateClockOnlyUI() {
   const progressBar = document.getElementById("signal-progress-bar");
   if (progressBar) {
     progressBar.style.width = `${Math.min(100, Math.max(0, progressPct))}%`;
+  }
+
+  // Pips nos segundos 57, 58 e 59 se houver PRE_SIGNAL ativo
+  if (lastLifecycle?.current?.phase === "PRE_SIGNAL") {
+    const pipSounds = soundsForTransition(lastLifecycle, lastLifecycle, sec, playedSoundSet);
+    playSoundList(pipSounds);
   }
 }
 
@@ -126,7 +142,6 @@ function renderSignalCard(data, timerState = null) {
 
   activeSignalData = data;
   const currentTimer = timerState || candleTimer.getState();
-  const remainingSec = currentTimer.remainingSeconds;
   const vm = createViewModel(data || {}, currentTimer);
 
   const action = vm.signal ? vm.signal.direction : "WAIT";
@@ -148,105 +163,70 @@ function renderSignalCard(data, timerState = null) {
   if (action === "CALL") {
     card.classList.add("is-call");
     if (badge) {
-      badge.textContent = "▲ PRÉ-SINAL (COMPRA)";
       badge.className = "signal-badge call";
+      badge.textContent = "▲ CALL (COMPRA)";
     }
     if (iconEl) iconEl.textContent = "▲";
-    if (titleEl) {
-      titleEl.textContent = currentTimer.phase === "EXECUTE" ? "🚀 ENTRAR AGORA (COMPRA)!" : "COMPRA CONFIRMADA P/ ABERTURA";
-    }
-    if (subTitleEl) {
-      subTitleEl.textContent =
-        currentTimer.phase === "EXECUTE"
-          ? "Vela M1 aberta · Janela de 5s na B2Trading"
-          : `Gatilho M1: ${substrat} · Entrada na virada`;
-    }
-    if (timingLabel) {
-      timingLabel.innerHTML =
-        currentTimer.phase === "EXECUTE"
-          ? "⚡ <b>EXECUTAR AGORA NA ABERTURA!</b>"
-          : `ABERTURA DA VELA (em ${remainingSec}s)`;
-    }
+    if (titleEl) titleEl.textContent = `Operação CALL · ${substrat}`;
+    if (subTitleEl) subTitleEl.textContent = "Frequência de alta detectada no fluxo. Entrada na abertura.";
+    if (timingLabel) timingLabel.textContent = "NA ABERTURA DA VELA (00:00)";
   } else if (action === "PUT") {
     card.classList.add("is-put");
     if (badge) {
-      badge.textContent = "▼ PRÉ-SINAL (VENDA)";
       badge.className = "signal-badge put";
+      badge.textContent = "▼ PUT (VENDA)";
     }
     if (iconEl) iconEl.textContent = "▼";
-    if (titleEl) {
-      titleEl.textContent = currentTimer.phase === "EXECUTE" ? "🚀 ENTRAR AGORA (VENDA)!" : "VENDA CONFIRMADA P/ ABERTURA";
-    }
-    if (subTitleEl) {
-      subTitleEl.textContent =
-        currentTimer.phase === "EXECUTE"
-          ? "Vela M1 aberta · Janela de 5s na B2Trading"
-          : `Gatilho M1: ${substrat} · Entrada na virada`;
-    }
-    if (timingLabel) {
-      timingLabel.innerHTML =
-        currentTimer.phase === "EXECUTE"
-          ? "⚡ <b>EXECUTAR AGORA NA ABERTURA!</b>"
-          : `ABERTURA DA VELA (em ${remainingSec}s)`;
-    }
+    if (titleEl) titleEl.textContent = `Operação PUT · ${substrat}`;
+    if (subTitleEl) subTitleEl.textContent = "Frequência de baixa detectada no fluxo. Entrada na abertura.";
+    if (timingLabel) timingLabel.textContent = "NA ABERTURA DA VELA (00:00)";
   } else {
     card.classList.add("is-wait");
     if (badge) {
-      badge.textContent = inDecisionWindow ? "SEM SINAL (AGUARDAR)" : "ESCANEANDO VELA ATUAL";
       badge.className = "signal-badge wait";
+      badge.textContent = data?.signalLabel || "ESCANEANDO";
     }
     if (iconEl) iconEl.textContent = "◎";
-    if (titleEl) {
-      titleEl.textContent = inDecisionWindow ? "Mercado Neutro / Sem Edge" : "Acumulando Microestrutura M1";
-    }
-    if (subTitleEl) {
-      subTitleEl.textContent = inDecisionWindow
-        ? "Nenhum modelo superou o breakeven com segurança · Abstenção"
-        : "Análise quantitativa e pré-alerta nos últimos 15s da vela";
-    }
-    if (timingLabel) {
-      timingLabel.innerHTML = inDecisionWindow
-        ? "ABSTENÇÃO DE ENTRADA (00:00)"
-        : `AGUARDAR JANELA DE ENTRADA (em ${Math.max(0, remainingSec - 15)}s)`;
-    }
+    if (titleEl) titleEl.textContent = "Aguardando Oportunidade";
+    if (subTitleEl) subTitleEl.textContent = "Analisando microestrutura e confluências quantitativas...";
+    if (timingLabel) timingLabel.textContent = "NA ABERTURA DA PRÓXIMA VELA";
   }
 
   if (stratBadge) {
-    stratBadge.textContent = substrat;
-    stratBadge.title = substrat;
+    stratBadge.textContent = substrat.toUpperCase();
   }
 
-  // Métricas
+  // Métricas do Card
   const probEl = document.getElementById("sig-prob");
-  if (probEl) probEl.textContent = action !== "WAIT" ? `${(prob * 100).toFixed(1)}%` : "--%";
+  if (probEl) probEl.textContent = action !== "WAIT" ? `${(prob * 100).toFixed(0)}%` : "--%";
 
   const edgeEl = document.getElementById("sig-edge");
   if (edgeEl) edgeEl.textContent = action !== "WAIT" ? `${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(1)}%` : "--%";
 
   const qualEl = document.getElementById("sig-qual");
-  if (qualEl) qualEl.textContent = action !== "WAIT" ? `${Math.round(qual * 100)}%` : "--%";
+  if (qualEl) qualEl.textContent = action !== "WAIT" ? `${(qual * 100).toFixed(0)}%` : "--%";
 
   const wrEl = document.getElementById("sig-wr");
-  if (wrEl) wrEl.textContent = stats.winRate != null && stats.settled > 0 ? `${stats.winRate.toFixed(1)}%` : "--%";
+  if (wrEl) wrEl.textContent = stats.total > 0 ? `${Number(stats.winRate || 0).toFixed(0)}%` : "--%";
 
   updateCountdownUI(currentTimer);
 }
 
 /**
- * Renderiza a Aba de Análise Quantitativa
+ * Renderiza a Aba de Análise Quantitativa Detalhada
  */
 function renderQuantAnalysis(data) {
   if (!data) return;
 
-  // 1. Resumo do Radar
+  // 1. Radar Quantitativo
   const regimeEl = document.getElementById("q-regime");
-  if (regimeEl) regimeEl.textContent = `REGIME: ${data.regime || "NORMAL"}`;
+  if (regimeEl) regimeEl.textContent = `REGIME: ${(data.regime || "NORMAL").toUpperCase()}`;
 
   const topSubEl = document.getElementById("q-top-substrat");
-  if (topSubEl) topSubEl.textContent = data.subStrategy || data.strategyName || "Nenhuma";
+  if (topSubEl) topSubEl.textContent = data.subStrategy || data.strategyName || "---";
 
   const adjEdgeEl = document.getElementById("q-adj-edge");
-  const edge = Number(data.edge || 0);
+  const edge = Number(data.edge ?? 0);
   if (adjEdgeEl) adjEdgeEl.textContent = `${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(1)}%`;
 
   const probConsEl = document.getElementById("q-prob-cons");
@@ -411,19 +391,14 @@ function renderSignalsHistory(signals = []) {
 }
 
 /**
- * Renderiza logs filtrados estritamente pelo ativo atual ou pela aba da janela
+ * Renderiza logs filtrados estritamente pela aba da janela
  */
 function renderLogs(logs = []) {
   const rawLogs = Array.isArray(logs) ? logs : [];
-  const targetSym = selectedSymbol || windowLockedSymbol;
-
-  const filtered = targetSym
-    ? rawLogs.filter((entry) => !entry.symbol || entry.symbol === targetSym || (currentTabId && entry.tabId === currentTabId))
-    : rawLogs;
 
   const seenIds = new Set();
   const deduped = [];
-  for (const entry of filtered) {
+  for (const entry of rawLogs) {
     if (entry.id && seenIds.has(entry.id)) continue;
     if (entry.id) seenIds.add(entry.id);
 
@@ -442,7 +417,7 @@ function renderLogs(logs = []) {
   if (!currentLogs.length) {
     const empty = document.createElement("p");
     empty.className = "logs-empty";
-    empty.textContent = targetSym ? `Esperando eventos de ${targetSym}…` : "Esperando eventos do sistema…";
+    empty.textContent = "Esperando eventos do sistema…";
     list.appendChild(empty);
     return;
   }
@@ -463,127 +438,68 @@ function renderLogs(logs = []) {
 }
 
 /**
- * Renderização inteligente de abas de ativos: atualiza in-place sem destruir elementos a cada tick (Zero Flicker)
+ * Exibe aviso quando a aba ativa desta janela não é da corretora B2Trading (I-01, I-02)
  */
-function renderAssetTabs(symbolsMap, currentActive) {
-  const tabsContainer = document.getElementById("asset-tabs");
-  if (!tabsContainer) return;
+function showOpenB2Notice() {
+  const copyEl = document.getElementById("status-copy");
+  if (copyEl) copyEl.textContent = "Abre B2Trading en esta ventana";
 
-  const symbols = Object.keys(symbolsMap || {});
-  if (symbols.length <= 1) {
-    tabsContainer.style.display = "none";
-    return;
-  }
-  tabsContainer.style.display = "flex";
+  const dotEl = document.getElementById("status-dot");
+  if (dotEl) dotEl.className = "dot amber";
 
-  const existingButtons = Array.from(tabsContainer.querySelectorAll(".asset-tab-btn"));
-  const existingSymbols = existingButtons.map((b) => b.getAttribute("data-symbol"));
+  const assetEl = document.getElementById("asset");
+  if (assetEl) assetEl.textContent = "---";
 
-  const isListEqual = existingSymbols.length === symbols.length && symbols.every((s, i) => existingSymbols[i] === s);
+  const tfEl = document.getElementById("timeframe");
+  if (tfEl) tfEl.textContent = "M1";
 
-  if (!isListEqual) {
-    tabsContainer.replaceChildren();
-    symbols.forEach((sym) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.setAttribute("data-symbol", sym);
-      btn.className = `asset-tab-btn ${(selectedSymbol || currentActive) === sym ? "is-active" : ""}`;
+  const feedCopyEl = document.getElementById("feed-copy");
+  if (feedCopyEl) feedCopyEl.textContent = "Sin datos";
 
-      const symData = symbolsMap[sym] || {};
-      const symDot = symData.state === "READY" ? "teal" : symData.state === "BOOTING" ? "amber" : "steel";
-      const dot = document.createElement("i");
-      dot.className = `dot ${symDot}`;
-      dot.style.cssText = "width:6px;height:6px;display:inline-block;border-radius:50%;margin-right:2px;";
-      btn.appendChild(dot);
+  const feedDotEl = document.getElementById("feed-dot");
+  if (feedDotEl) feedDotEl.className = "dot amber";
 
-      const span = document.createElement("span");
-      span.className = "tab-label";
-      span.textContent = sym + (symData.lastPrice && symData.lastPrice !== "---" ? ` (${symData.lastPrice})` : "");
-      btn.appendChild(span);
-
-      btn.addEventListener("click", () => {
-        selectedSymbol = sym;
-        renderState(cachedState, cachedTabState);
-      });
-      tabsContainer.appendChild(btn);
-    });
-  } else {
-    existingButtons.forEach((btn) => {
-      const sym = btn.getAttribute("data-symbol");
-      const isActive = (selectedSymbol || currentActive) === sym;
-      btn.classList.toggle("is-active", isActive);
-
-      const symData = symbolsMap[sym] || {};
-      const symDot = symData.state === "READY" ? "teal" : symData.state === "BOOTING" ? "amber" : "steel";
-      const dot = btn.querySelector(".dot");
-      if (dot) dot.className = `dot ${symDot}`;
-
-      const span = btn.querySelector(".tab-label");
-      if (span) {
-        span.textContent = sym + (symData.lastPrice && symData.lastPrice !== "---" ? ` (${symData.lastPrice})` : "");
-      }
-    });
-  }
+  renderSignalCard({ symbol: "---", action: "WAIT" });
+  renderSignalsHistory([]);
+  renderLogs([]);
 }
 
 /**
- * Renderiza o estado com afinidade estrita de janela
+ * Renderiza o estado com afinidade estrita à aba e janela vinculadas
  */
-function renderState(globalData = {}, localTabState = null) {
+function renderState(state = null, signals = [], logs = []) {
   try {
-    cachedState = globalData || {};
-    cachedTabState = localTabState || cachedTabState;
-    const symbols = cachedState.symbols || {};
-
-    // 1. Descobre se a aba atual desta janela possui um símbolo registrado
-    if (currentTabId && cachedState.tabs?.[currentTabId]?.symbol) {
-      windowLockedSymbol = cachedState.tabs[currentTabId].symbol;
-    } else if (localTabState?.symbol) {
-      windowLockedSymbol = localTabState.symbol;
+    if (!state) {
+      if (!isBoundTabB2) {
+        showOpenB2Notice();
+      }
+      return;
     }
 
-    // 2. Determina a chave ativa com prioridade estrita:
-    let activeKey = selectedSymbol;
-    if (!activeKey || !symbols[activeKey]) {
-      activeKey =
-        windowLockedSymbol ||
-        cachedState.tabs?.[currentTabId]?.symbol ||
-        localTabState?.symbol ||
-        cachedState.symbol ||
-        Object.keys(symbols)[0] ||
-        "---";
-    }
-
-    const displayData = symbols[activeKey] || (localTabState?.symbol === activeKey ? localTabState : null) || cachedState;
-    renderAssetTabs(symbols, activeKey);
+    const displayData = state;
 
     // Sincroniza o relógio de mercado com o offset recebido
     if (displayData.clockOffsetMs !== undefined) {
       localMarketClock.offsetMs = displayData.clockOffsetMs;
-    } else if (state?.clockOffsetMs !== undefined) {
-      localMarketClock.offsetMs = state.clockOffsetMs;
     }
+
+    // Avalia efeitos sonoros da transição do ciclo de vida
+    const nextLifecycle = displayData.lifecycle || null;
+    const sec = localMarketClock.secondInCandle(60);
+    const sounds = soundsForTransition(lastLifecycle, nextLifecycle, sec, playedSoundSet);
+    playSoundList(sounds);
+    lastLifecycle = nextLifecycle;
+
     const currentTimerState = candleTimer.getState();
 
-    // 3. Renderiza o Card Visual de Sinal e as Abas
+    // 1. Renderiza Card Visual de Sinal, Análise e Histórico
     renderSignalCard(displayData, currentTimerState);
     renderQuantAnalysis(displayData);
-    renderSignalsHistory(displayData.signalsHistory || cachedState.signalsHistory || []);
+    renderSignalsHistory(signals);
+    renderLogs(logs);
 
-    // 4. Detecção de novos sinais via polling de storage (caso a mensagem direta falhe)
-    const vm = createViewModel(displayData, displayData.candleTimer || cachedState.candleTimer || {}, { now: Date.now() });
-    const curAction = vm.signal ? vm.signal.direction : "WAIT";
-    const candleTs = displayData.candleTimestamp || Math.floor(currentTimerState.epoch / 60) * 60;
-
-    if (vm.signal && (curAction === "CALL" || curAction === "PUT")) {
-      if (lastAlertedCandleTs !== candleTs) {
-        lastAlertedCandleTs = candleTs;
-        if (curAction === "CALL") audioAlertManager.playCallAlert();
-        else if (curAction === "PUT") audioAlertManager.playPutAlert();
-      }
-    }
-
-    // 5. Renderização dos elementos básicos do Status Card
+    // 2. Renderização dos elementos do Status Card
+    const vm = createViewModel(displayData, displayData.candleTimer || currentTimerState || {}, { now: Date.now() });
     const copy = {
       CONECTANDO: "Activo · Buscando la transmisión…",
       CALIBRANDO: "Activo · Calibrando datos…",
@@ -599,7 +515,7 @@ function renderState(globalData = {}, localTabState = null) {
     if (dotEl) dotEl.className = `dot ${vm.statusDot || "amber"}`;
 
     const assetEl = document.getElementById("asset");
-    if (assetEl) assetEl.textContent = vm.asset || activeKey;
+    if (assetEl) assetEl.textContent = vm.asset || displayData.symbol || "---";
 
     const tfEl = document.getElementById("timeframe");
     if (tfEl) tfEl.textContent = vm.timeframe || "M1";
@@ -638,37 +554,57 @@ function renderState(globalData = {}, localTabState = null) {
 }
 
 /**
- * Consulta o estado atual da aba desta janela
+ * Atualiza contexto de janela e aba vinculada ao Side Panel
  */
-function refreshWindowState() {
-  if (!currentTabId) return;
+async function updateBoundContext() {
+  try {
+    if (typeof chrome !== "undefined" && chrome.windows?.getCurrent) {
+      const win = await chrome.windows.getCurrent();
+      boundWindowId = win?.id || null;
+    }
+    if (typeof chrome !== "undefined" && chrome.tabs?.query && boundWindowId != null) {
+      const tabs = await chrome.tabs.query({ active: true, windowId: boundWindowId });
+      const activeTab = tabs?.[0];
+      boundTabId = activeTab?.id || null;
+      const url = activeTab?.url || "";
+      isBoundTabB2 = url.includes("b2trading.io");
+    }
+  } catch (_) {}
+}
 
-  const tabStateKey = `oracleMarketState_tab_${currentTabId}`;
-  const tabLogsKey = `oracle_logs_tab_${currentTabId}`;
+/**
+ * Consulta o estado atual da aba vinculada a esta janela (I-01, I-02)
+ */
+async function refreshWindowState() {
+  await updateBoundContext();
+  if (!boundTabId) return;
 
-  chrome.storage.local.get([tabStateKey, tabLogsKey, "oracleMarketState", "oracle_logs", "oracle_signals_history"], (res) => {
-    const tabState = res?.[tabStateKey];
-    const globalState = res?.oracleMarketState || {};
-    const tabLogs = res?.[tabLogsKey];
-    const globalLogs = res?.oracle_logs || [];
-    const signalsHistory = res?.oracle_signals_history || [];
+  if (!isBoundTabB2) {
+    showOpenB2Notice();
+    return;
+  }
 
-    if (tabState?.symbol) {
-      windowLockedSymbol = tabState.symbol;
-    } else if (globalState.tabs?.[currentTabId]?.symbol) {
-      windowLockedSymbol = globalState.tabs[currentTabId].symbol;
+  const stateKey = `ifx:tab:${boundTabId}:state`;
+  const signalsKey = `ifx:tab:${boundTabId}:signals`;
+  const logsKey = `ifx:tab:${boundTabId}:logs`;
+  const soundKey = boundWindowId ? `ifx:window:${boundWindowId}:sound` : null;
+
+  const keysToGet = [stateKey, signalsKey, logsKey];
+  if (soundKey) keysToGet.push(soundKey);
+
+  chrome.storage.local.get(keysToGet, (res) => {
+    if (soundKey && res[soundKey] !== undefined) {
+      audioAlertManager.setSoundEnabled(Boolean(res[soundKey]));
+      const soundToggle = document.getElementById("sound-toggle");
+      if (soundToggle) soundToggle.checked = Boolean(res[soundKey]);
     }
 
-    if (signalsHistory.length && !globalState.signalsHistory?.length) {
-      globalState.signalsHistory = signalsHistory;
-    }
-
-    renderState(globalState, tabState);
-    renderLogs(tabLogs && tabLogs.length ? tabLogs : globalLogs);
+    const view = selectTabView(res, boundTabId);
+    renderState(view.state, view.signals, view.logs);
   });
 }
 
-function initSidepanel() {
+async function initSidepanel() {
   // Desbloqueia o áudio imediatamente em qualquer clique
   document.addEventListener("click", () => {
     audioAlertManager._ensureContext();
@@ -681,42 +617,24 @@ function initSidepanel() {
   setInterval(updateClockOnlyUI, 250);
   updateClockOnlyUI();
 
-  // Escuta sinais disparados em tempo real pelo runtime
-  if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.type === "ORACLE_NEW_SIGNAL" && msg.signal) {
-        const sig = msg.signal;
-        const candleTs = sig.candleTimestamp;
-        if (lastAlertedCandleTs !== candleTs) {
-          lastAlertedCandleTs = candleTs;
-          if (sig.action === "CALL") {
-            audioAlertManager.playCallAlert();
-          } else if (sig.action === "PUT") {
-            audioAlertManager.playPutAlert();
-          } else {
-            audioAlertManager.playSignalAlert();
-          }
-        }
-        renderSignalCard(sig);
-      }
-    });
-  }
+  // 2. Identifica janela e aba ligadas
+  await updateBoundContext();
 
-  // 2. Identifica a janela e a aba ativa acopladas a este Side Panel
-  if (typeof chrome !== "undefined" && chrome.tabs?.query) {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const activeTab = tabs?.[0];
-      if (activeTab) {
-        currentTabId = activeTab.id;
-        currentWindowId = activeTab.windowId;
-      }
-      refreshWindowState();
-    });
-
+  if (typeof chrome !== "undefined" && chrome.tabs) {
     if (chrome.tabs.onActivated) {
-      chrome.tabs.onActivated.addListener((activeInfo) => {
-        if (activeInfo.windowId === currentWindowId) {
-          currentTabId = activeInfo.tabId;
+      chrome.tabs.onActivated.addListener(async (activeInfo) => {
+        if (activeInfo.windowId === boundWindowId) {
+          boundTabId = activeInfo.tabId;
+          await refreshWindowState();
+        }
+      });
+    }
+
+    if (chrome.tabs.onUpdated) {
+      chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        if (tabId === boundTabId) {
+          const url = tab?.url || "";
+          isBoundTabB2 = url.includes("b2trading.io");
           refreshWindowState();
         }
       });
@@ -724,25 +642,24 @@ function initSidepanel() {
   }
 
   // 3. Carrega preferências e estado inicial
-  chrome.storage.local.get(
-    ["oracleMarketState", "oracle_active_tab_metrics", "oracle_sound_enabled", "oracle_logs", "oracle_signals_history", NOTIFICATIONS_KEY],
-    (result) => {
-      const soundToggle = document.getElementById("sound-toggle");
-      if (soundToggle) {
-        soundToggle.checked = result.oracle_sound_enabled === undefined ? audioAlertManager.isSoundEnabled() : Boolean(result.oracle_sound_enabled);
-      }
-      const notifToggle = document.getElementById("notification-toggle");
-      if (notifToggle) {
-        notifToggle.checked = result[NOTIFICATIONS_KEY] !== false;
-      }
-      const st = result.oracleMarketState || result.oracle_active_tab_metrics || {};
-      if (result.oracle_signals_history && !st.signalsHistory) {
-        st.signalsHistory = result.oracle_signals_history;
-      }
-      renderState(st);
-      renderLogs(result.oracle_logs || []);
+  const winSoundKey = boundWindowId ? `ifx:window:${boundWindowId}:sound` : null;
+  const prefKeys = [NOTIFICATIONS_KEY];
+  if (winSoundKey) prefKeys.push(winSoundKey);
+
+  chrome.storage.local.get(prefKeys, (result) => {
+    const soundToggle = document.getElementById("sound-toggle");
+    if (soundToggle) {
+      const isSound = winSoundKey && result[winSoundKey] !== undefined ? Boolean(result[winSoundKey]) : audioAlertManager.isSoundEnabled();
+      soundToggle.checked = isSound;
+      audioAlertManager.setSoundEnabled(isSound);
     }
-  );
+    const notifToggle = document.getElementById("notification-toggle");
+    if (notifToggle) {
+      notifToggle.checked = result[NOTIFICATIONS_KEY] !== false;
+    }
+  });
+
+  await refreshWindowState();
 
   // 4. Listeners das Abas Principais
   document.getElementById("tab-btn-signal")?.addEventListener("click", () => switchMainTab("signal"));
@@ -750,18 +667,25 @@ function initSidepanel() {
   document.getElementById("tab-btn-logs")?.addEventListener("click", () => switchMainTab("logs"));
 
   // 5. Switches e Ações
-  document.getElementById("sound-toggle")?.addEventListener("change", (event) => audioAlertManager.setSoundEnabled(event.target.checked));
-  document.getElementById("notification-toggle")?.addEventListener("change", (event) => chrome.storage.local.set({ [NOTIFICATIONS_KEY]: event.target.checked }));
+  document.getElementById("sound-toggle")?.addEventListener("change", (event) => {
+    const enabled = event.target.checked;
+    audioAlertManager.setSoundEnabled(enabled);
+    if (winSoundKey) {
+      chrome.storage.local.set({ [winSoundKey]: enabled });
+    }
+  });
+  document.getElementById("notification-toggle")?.addEventListener("change", (event) => {
+    chrome.storage.local.set({ [NOTIFICATIONS_KEY]: event.target.checked });
+  });
   document.getElementById("copy-logs")?.addEventListener("click", () => {
     const text = currentLogs.map((entry) => `[${entry.time || ""}] [${translateLogTag(entry.tag)}] ${translateLogMessage(entry.message || "")}`).join("\n");
     if (text && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
   });
   document.getElementById("clear-logs")?.addEventListener("click", () => {
-    sendToB2Tabs({ type: "ORACLE_CLEAR_LOGS" });
-    if (currentTabId) {
-      chrome.storage.local.remove([`oracle_logs_tab_${currentTabId}`]);
+    sendToBoundTab({ type: "ORACLE_CLEAR_LOGS" });
+    if (boundTabId) {
+      chrome.storage.local.remove([`ifx:tab:${boundTabId}:logs`]);
     }
-    chrome.storage.local.set({ oracle_logs: [] });
     renderLogs([]);
   });
   document.getElementById("open-traderoom")?.addEventListener("click", () => {
@@ -779,27 +703,14 @@ function initSidepanel() {
     chrome.runtime.sendMessage({ type: "ORACLE_ARRANGE_MULTI_WINDOWS", count: 3 });
   });
 
-  // 6. Observador de mudanças no Storage
+  // 6. Observador de mudanças no Storage estritamente isolado para a aba vinculada
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local") return;
+    if (area !== "local" || !boundTabId) return;
 
-    const tabStateKey = currentTabId ? `oracleMarketState_tab_${currentTabId}` : null;
-    const tabLogsKey = currentTabId ? `oracle_logs_tab_${currentTabId}` : null;
-
-    if (tabStateKey && changes[tabStateKey]?.newValue) {
-      renderState(cachedState, changes[tabStateKey].newValue);
-    } else if (changes.oracleMarketState?.newValue) {
-      renderState(changes.oracleMarketState.newValue, cachedTabState);
-    }
-
-    if (changes.oracle_signals_history?.newValue) {
-      renderSignalsHistory(changes.oracle_signals_history.newValue);
-    }
-
-    if (tabLogsKey && changes[tabLogsKey]?.newValue) {
-      renderLogs(changes[tabLogsKey].newValue);
-    } else if (changes.oracle_logs?.newValue) {
-      renderLogs(changes.oracle_logs.newValue);
+    const tabPrefix = `ifx:tab:${boundTabId}:`;
+    const relevant = Object.keys(changes).some((k) => k.startsWith(tabPrefix) || k === winSoundKey);
+    if (relevant) {
+      refreshWindowState();
     }
   });
 }

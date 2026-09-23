@@ -163,7 +163,6 @@ test(
 // A função de seleção do Side Panel com boundTabId=2 não pode devolver nenhum dado da aba 1.
 test(
   "Caso 5 (ETAPA 06) — I-01/I-02: isolamento multi-abas no seletor de visualização do Side Panel",
-  { skip: "desbloqueado na ETAPA 06" },
   async () => {
     const { selectTabView } = await import("../src/ui/tab-view-selector.js");
 

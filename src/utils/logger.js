@@ -142,22 +142,10 @@ export class LogManager {
       this._syncTimeout = null;
       if (typeof chrome !== "undefined" && chrome.storage?.local) {
         try {
-          // 1. Grava chave isolada da aba se disponível
+          // Grava chave isolada exclusiva da aba
           if (this.context?.tabId) {
-            chrome.storage.local.set({ [`oracle_logs_tab_${this.context.tabId}`]: this.logs });
+            chrome.storage.local.set({ [`ifx:tab:${this.context.tabId}:logs`]: this.logs.slice(-120) });
           }
-
-          // 2. Mescla no log global compartilhado preservando logs de outras abas/ativos
-          chrome.storage.local.get(["oracle_logs"], (res) => {
-            const existing = Array.isArray(res?.oracle_logs) ? res.oracle_logs : [];
-            const map = new Map();
-            existing.forEach((e) => map.set(e.id, e));
-            this.logs.forEach((e) => map.set(e.id, e));
-            const merged = Array.from(map.values())
-              .sort((a, b) => (a.timeMs || 0) - (b.timeMs || 0))
-              .slice(-120);
-            chrome.storage.local.set({ oracle_logs: merged });
-          });
         } catch (_) {}
       }
     };

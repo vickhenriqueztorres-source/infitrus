@@ -1,6 +1,4 @@
-import { registerNotifications } from "./notifications.js";
-
-registerNotifications();
+import { handleTabStateChange } from "./notifications.js";
 
 function configureDockedPanel() {
   if (typeof chrome === "undefined" || !chrome.sidePanel?.setPanelBehavior) return;
@@ -12,7 +10,34 @@ configureDockedPanel();
 chrome.runtime.onInstalled.addListener(() => {
   console.log("[Inflitrus] Extensión instalada.");
   configureDockedPanel();
+  try {
+    chrome.storage.local.remove([
+      "oracleMarketState",
+      "oracle_logs",
+      "oracle_signals_history",
+      "oracle_active_tab_metrics",
+    ]);
+  } catch (_) {}
 });
+
+// Escuta mudanças de estado por aba para atualizar badge e emitir notificações (I-06, I-07)
+if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+
+    for (const [key, change] of Object.entries(changes)) {
+      const match = /^ifx:tab:(\d+):state$/.exec(key);
+      if (!match) continue;
+
+      const tabId = Number(match[1]);
+      const newState = change.newValue;
+      const oldState = change.oldValue;
+      if (!newState) continue;
+
+      handleTabStateChange(tabId, newState, oldState).catch(() => {});
+    }
+  });
+}
 
 // Responde a pedidos de identificação de aba/janela e gerenciamento de multitelas
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -34,19 +59,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Limpeza de abas fechadas para não deixar abas fantasmas no storage
-chrome.tabs.onRemoved.addListener((tabId) => {
-  try {
-    chrome.storage.local.get(["oracleMarketState"], (res) => {
-      const state = res?.oracleMarketState;
-      if (state && state.tabs && state.tabs[tabId]) {
-        delete state.tabs[tabId];
-        chrome.storage.local.set({ oracleMarketState: state });
-      }
-      chrome.storage.local.remove([`oracleMarketState_tab_${tabId}`, `oracle_logs_tab_${tabId}`]);
-    });
-  } catch (_) {}
-});
+// Atualiza windowId quando a aba é movida para outra janela
+if (typeof chrome !== "undefined" && chrome.tabs?.onAttached) {
+  chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
+    try {
+      chrome.tabs.sendMessage(tabId, {
+        type: "ORACLE_TAB_ATTACHED",
+        windowId: attachInfo.newWindowId,
+      }).catch(() => {});
+    } catch (_) {}
+  });
+}
+
+// Limpeza de abas fechadas para não deixar chaves órfãs no storage (I-01)
+if (typeof chrome !== "undefined" && chrome.tabs?.onRemoved) {
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    try {
+      chrome.storage.local.remove([
+        `ifx:tab:${tabId}:state`,
+        `ifx:tab:${tabId}:signals`,
+        `ifx:tab:${tabId}:logs`,
+        `oracleMarketState_tab_${tabId}`,
+        `oracle_logs_tab_${tabId}`,
+      ]);
+    } catch (_) {}
+  });
+}
 
 /**
  * Organiza 2 ou 3 janelas lado a lado com B2Trading aberta

@@ -3,7 +3,7 @@
  * Oracle Quant Signals
  *
  * Responsabilidade:
- * - Armazenar cada sinal disparado em chrome.storage.local (oracle_signals_history).
+ * - Armazenar cada sinal disparado em chrome.storage.local (ifx:tab:<tabId>:signals).
  * - Monitorar o fechamento da vela seguinte (t + 1) e auditar automaticamente:
  *     C_{t+1} > C_t e CALL => WIN (+Payout)
  *     C_{t+1} < C_t e PUT  => WIN (+Payout)
@@ -33,22 +33,23 @@ export class SignalAuditor {
       byConfluence: {},
     };
 
-    this._initStorage();
+    this.tabId = null;
   }
 
   /**
-   * Inicializa e carrega sinais prévios do chrome.storage.local
-   * @private
+   * Configura o tabId da aba para isolamento estrito de storage
+   * @param {number|string} tabId
    */
-  _initStorage() {
+  setTabId(tabId) {
+    if (!tabId) return;
+    this.tabId = Number(tabId);
     if (typeof chrome !== "undefined" && chrome.storage?.local) {
       try {
-        chrome.storage.local.get(["oracle_signals_history", "oracle_signals_stats"], (res) => {
-          if (Array.isArray(res.oracle_signals_history)) {
-            this.signals = res.oracle_signals_history;
-          }
-          if (res.oracle_signals_stats && typeof res.oracle_signals_stats === "object") {
-            this.stats = { ...this.stats, ...res.oracle_signals_stats };
+        const key = `ifx:tab:${this.tabId}:signals`;
+        chrome.storage.local.get([key], (res) => {
+          if (Array.isArray(res?.[key])) {
+            this.signals = res[key];
+            this._recomputeStats();
           }
         });
       } catch (_) {}
@@ -341,15 +342,14 @@ export class SignalAuditor {
   }
 
   /**
-   * Persiste no chrome.storage.local
+   * Persiste no chrome.storage.local da aba vinculada
    * @private
    */
   _persistStorage() {
-    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+    if (typeof chrome !== "undefined" && chrome.storage?.local && this.tabId) {
       try {
         chrome.storage.local.set({
-          oracle_signals_history: this.signals,
-          oracle_signals_stats: this.stats,
+          [`ifx:tab:${this.tabId}:signals`]: this.signals.slice(0, 150),
         });
       } catch (_) {}
     }
