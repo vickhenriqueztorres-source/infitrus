@@ -11,12 +11,7 @@ chrome.runtime.onInstalled.addListener(() => {
   console.log("[Inflitrus] Extensión instalada.");
   configureDockedPanel();
   try {
-    chrome.storage.local.remove([
-      "oracleMarketState",
-      "oracle_logs",
-      "oracle_signals_history",
-      "oracle_active_tab_metrics",
-    ]);
+    chrome.storage.local.clear().catch(() => {});
   } catch (_) {}
 });
 
@@ -79,8 +74,6 @@ if (typeof chrome !== "undefined" && chrome.tabs?.onRemoved) {
         `ifx:tab:${tabId}:state`,
         `ifx:tab:${tabId}:signals`,
         `ifx:tab:${tabId}:logs`,
-        `oracleMarketState_tab_${tabId}`,
-        `oracle_logs_tab_${tabId}`,
       ]);
     } catch (_) {}
   });

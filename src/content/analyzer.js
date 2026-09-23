@@ -130,7 +130,6 @@ export class MarketAnalyzer {
       isConfluence: false,
       isDivergent: false,
       reasons: ["Inicializando portfólio quantitativo..."],
-      isNewSignal: false,
     };
 
     this.currentSignal = {
@@ -138,7 +137,6 @@ export class MarketAnalyzer {
       label: "AGUARDAR",
       indicators: {},
       reasons: ["Inicializando observador quant"],
-      isNewSignal: false,
     };
 
     this.socketStatus = "desconectado";

@@ -1,4 +1,3 @@
-import { audioAlertManager } from "../utils/audio-alerts.js";
 import { createViewModel } from "../ui/view-model.js";
 import { WaveRenderer } from "../ui/wave.js";
 import { selectTabView } from "../ui/tab-view-selector.js";
@@ -73,7 +72,6 @@ async function refreshPopupState() {
 
   const stored = await getStorage(keys);
   if (soundKey && stored[soundKey] !== undefined) {
-    audioAlertManager.setSoundEnabled(Boolean(stored[soundKey]));
     const soundToggle = document.getElementById("sound-toggle");
     if (soundToggle) soundToggle.checked = Boolean(stored[soundKey]);
   }
@@ -100,7 +98,7 @@ async function initialize() {
 
   const soundToggle = document.getElementById("sound-toggle");
   if (soundToggle) {
-    soundToggle.checked = soundKey && stored[soundKey] !== undefined ? Boolean(stored[soundKey]) : audioAlertManager.isSoundEnabled();
+    soundToggle.checked = soundKey && stored[soundKey] !== undefined ? Boolean(stored[soundKey]) : true;
   }
 
   const notifToggle = document.getElementById("notification-toggle");
@@ -115,7 +113,6 @@ async function initialize() {
 
   soundToggle?.addEventListener("change", (event) => {
     const enabled = event.target.checked;
-    audioAlertManager.setSoundEnabled(enabled);
     if (soundKey) {
       chrome.storage.local.set({ [soundKey]: enabled });
     }

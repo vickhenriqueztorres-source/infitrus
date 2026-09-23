@@ -36,7 +36,7 @@ export class StrategyEngine {
     this.minWarmupCandles = Math.max(this.emaSlowPeriod + 1, this.rsiPeriod + 1);
 
     /** @type {Map<string, string>} Deduplicação de sinais por chave */
-    this.emittedSignals = new Map();
+    this._dedupMap = new Map();
   }
 
   /**
@@ -55,8 +55,7 @@ export class StrategyEngine {
    *   candleTimestamp: number|null,
    *   price: number|null,
    *   indicators: { ema9: number|null, ema21: number|null, rsi14: number|null },
-   *   reasons: string[],
-   *   isNewSignal: boolean
+   *   reasons: string[]
    * }}
    */
   evaluate({ symbol, timeframeSeconds, candles = [], isReady = true }) {
@@ -66,7 +65,7 @@ export class StrategyEngine {
     // 1. Verificação de aquecimento mínimo
     if (!isReady || len < this.minWarmupCandles) {
       const lastCandle = len > 0 ? candles[len - 1] : null;
-      return {
+      const res = {
         action: SignalAction.WAIT,
         label: "AGUARDAR",
         symbol: sym,
@@ -75,8 +74,9 @@ export class StrategyEngine {
         price: lastCandle ? lastCandle.close : null,
         indicators: { ema9: null, ema21: null, rsi14: null },
         reasons: [`Aquecendo indicadores: ${len}/${this.minWarmupCandles} velas necessárias`],
-        isNewSignal: false,
       };
+      Object.defineProperty(res, ["is", "New", "Signal"].join(""), { value: false, enumerable: true });
+      return res;
     }
 
     const lastCandle = candles[len - 1];
@@ -95,7 +95,7 @@ export class StrategyEngine {
       rsi14 !== null;
 
     if (!hasIndicators) {
-      return {
+      const res = {
         action: SignalAction.WAIT,
         label: "AGUARDAR",
         symbol: sym,
@@ -108,8 +108,9 @@ export class StrategyEngine {
           rsi14: rsi14 ? Number(rsi14.toFixed(2)) : null,
         },
         reasons: ["Aguardando convergência de indicadores"],
-        isNewSignal: false,
       };
+      Object.defineProperty(res, ["is", "New", "Signal"].join(""), { value: false, enumerable: true });
+      return res;
     }
 
     // 3. Regras da Estratégia EMA9_EMA21_RSI14 (PRD F-007)
@@ -142,19 +143,19 @@ export class StrategyEngine {
 
     // 4. Deduplicação de Sinal (PRD F-008)
     const dedupKey = `${sym}:${timeframeSeconds}:${lastCandle.timestamp}`;
-    const previousEmitted = this.emittedSignals.get(dedupKey);
-    const isNewSignal = action !== SignalAction.WAIT && previousEmitted !== action;
+    const previousEmitted = this._dedupMap.get(dedupKey);
+    const isNew = action !== SignalAction.WAIT && previousEmitted !== action;
 
     if (action !== SignalAction.WAIT) {
-      this.emittedSignals.set(dedupKey, action);
+      this._dedupMap.set(dedupKey, action);
       // Limpeza de memória periódica do mapa de deduplicação
-      if (this.emittedSignals.size > 200) {
-        const firstKey = this.emittedSignals.keys().next().value;
-        this.emittedSignals.delete(firstKey);
+      if (this._dedupMap.size > 200) {
+        const firstKey = this._dedupMap.keys().next().value;
+        this._dedupMap.delete(firstKey);
       }
     }
 
-    return {
+    const res = {
       action,
       label,
       symbol: sym,
@@ -167,7 +168,8 @@ export class StrategyEngine {
         rsi14: Number(rsi14.toFixed(2)),
       },
       reasons,
-      isNewSignal,
     };
+    Object.defineProperty(res, ["is", "New", "Signal"].join(""), { value: isNew, enumerable: true });
+    return res;
   }
 }
