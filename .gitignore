@@ -1,0 +1,24 @@
+# Dependencies & Virtual Environments
+node_modules/
+.venv/
+env/
+venv/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.pytest_cache/
+
+# Chrome / Browser Temporary & Profile Data
+browser-profile/
+
+# Logs & Temporary Files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# IDE & Editor Settings
+.vscode/
+.idea/

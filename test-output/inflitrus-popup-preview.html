@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es-419"><head><meta charset="utf-8"><link rel="stylesheet" href="../src/popup/popup.css"><title>Popup QA</title></head><body>
+<script>
+  const now = Date.now();
+  const mockState = {state:"READY",symbol:"AUDCAD_OTC",timeframe:"1 minuto",wsStatus:"conectado",historyCount:150,gaps:0,lastPrice:"0.89421",updatedAt:now,quantAction:"WAIT"};
+  const changeListeners = [];
+  globalThis.chrome = {
+    storage:{local:{get(_keys,cb){cb({oracleMarketState:mockState,oracle_sound_enabled:true,ifx_active_v1:true,ifx_notifications_v1:true})},set(){return Promise.resolve()}},onChanged:{addListener(fn){changeListeners.push(fn)}}},
+    tabs:{query(_q,cb){cb([])},sendMessage(){return Promise.resolve()},update(){},create(){}},
+    runtime:{getURL(path){return path}}
+  };
+</script>
+<script type="module">
+  const source = await fetch("../src/popup/popup.html").then((response)=>response.text());
+  const parsed = new DOMParser().parseFromString(source,"text/html");
+  document.body.append(parsed.querySelector("main"));
+  await import("../src/popup/popup.js");
+  document.dispatchEvent(new Event("DOMContentLoaded"));
+</script>
+</body></html>

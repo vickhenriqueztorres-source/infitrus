@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es-419">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Inflitrus Signals</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup-shell">
+    <header><div class="popup-brand" aria-label="Inflitrus Signals"><svg viewBox="0 0 48 32" aria-hidden="true"><path d="M1 17h8l4-13 6 26 5-20 4 12 4-9 4 4h11"/></svg><span><strong>INFLITRUS</strong><small>SIGNALS</small></span></div></header>
+    <section class="status-card">
+      <p class="eyebrow"><i id="status-dot" class="dot amber"></i><span id="status-copy">Activo · Buscando la transmisión…</span></p>
+      <canvas id="popup-wave" width="312" height="54" aria-label="Frecuencia del mercado"></canvas>
+      <div class="asset-row"><span id="asset">---</span><span>·</span><span id="timeframe">M1</span></div>
+      <p class="feed"><i id="feed-dot" class="dot amber"></i><span id="feed-copy">Datos inestables</span></p>
+    </section>
+    <section class="switches" aria-label="Preferencias">
+      <label><span><strong>Activo</strong><small>Muestra el panel en B2Trading</small></span><input id="active-toggle" type="checkbox" checked><i></i></label>
+      <label><span><strong>Sonido</strong><small>Alertas discretas de señal</small></span><input id="sound-toggle" type="checkbox"><i></i></label>
+      <label><span><strong>Notificaciones</strong><small>Avisos durante la ventana válida</small></span><input id="notification-toggle" type="checkbox" checked><i></i></label>
+    </section>
+    <button id="open-traderoom" class="primary" type="button">Abrir B2Trading</button>
+    <p class="legal">Inflitrus Signals es una herramienta de análisis técnico. No ejecuta operaciones ni garantiza resultados.</p>
+    <footer>Inflitrus detecta. Tú decides.</footer>
+  </main>
+  <script src="popup.js" type="module"></script>
+</body>
+</html>

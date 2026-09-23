@@ -1,0 +1,15 @@
+{
+  "start_time": "2026-09-22T15:25:44.161538+00:00",
+  "end_time": "2026-09-22T15:26:19.515786+00:00",
+  "duration_seconds": 35.35,
+  "total_requests": 5,
+  "total_responses": 5,
+  "failed_requests": 0,
+  "relevant_responses": 0,
+  "total_ws_connections": 0,
+  "ws_frames_received": 0,
+  "ws_frames_sent": 0,
+  "detected_symbols": [],
+  "last_detected_symbol": null,
+  "last_event_time": "2026-09-22T15:25:54.473546+00:00"
+}

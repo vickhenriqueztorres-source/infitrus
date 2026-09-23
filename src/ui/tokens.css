@@ -1,0 +1,34 @@
+:host {
+  --ifx-petroleum: #0B1A1F;
+  --ifx-teal: #3FE0C5;
+  --ifx-steel: #8A9BA3;
+  --ifx-amber: #F2A93B;
+  --ifx-ice: #E6EEF0;
+  --ifx-coral: #FF5A6E;
+  --ifx-surface-0: #0B1A1F;
+  --ifx-surface-1: rgba(138,155,163,0.06);
+  --ifx-surface-2: rgba(138,155,163,0.10);
+  --ifx-border: rgba(138,155,163,0.18);
+  --ifx-border-strong: rgba(63,224,197,0.35);
+  --ifx-teal-soft: rgba(63,224,197,0.12);
+  --ifx-amber-soft: rgba(242,169,59,0.12);
+  --ifx-coral-soft: rgba(255,90,110,0.12);
+  --ifx-scanline: rgba(63,224,197,0.03);
+  --ifx-glow-teal: 0 0 6px rgba(63,224,197,0.5);
+  --ifx-call: var(--ifx-teal);
+  --ifx-put: var(--ifx-coral);
+  --ifx-warn: var(--ifx-amber);
+  --ifx-text: var(--ifx-ice);
+  --ifx-text-muted: var(--ifx-steel);
+  --ifx-font-display: 'Space Grotesk', system-ui, sans-serif;
+  --ifx-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ifx-radius-panel: 16px;
+  --ifx-radius-card: 10px;
+  --ifx-radius-chip: 8px;
+  --ifx-space: 4px;
+  --ifx-fast: 120ms;
+  --ifx-base: 220ms;
+  --ifx-reveal: 600ms;
+  --ifx-ease: cubic-bezier(0.2,0,0,1);
+  --ifx-ease-reveal: cubic-bezier(0.16,1,0.3,1);
+}

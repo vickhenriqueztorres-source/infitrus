@@ -1,0 +1,87 @@
+{
+  "manifest_version": 3,
+  "name": "Inflitrus Signals",
+  "short_name": "Inflitrus",
+  "version": "0.1.0",
+  "description": "Escucha el mercado. Encuentra la señal. Herramienta de análisis técnico para B2Trading. No ejecuta operaciones.",
+  "permissions": [
+    "storage",
+    "notifications",
+    "tabs",
+    "sidePanel"
+  ],
+  "side_panel": {
+    "default_path": "src/sidepanel/sidepanel.html"
+  },
+  "host_permissions": [
+    "https://traderoom.b2trading.io/*",
+    "https://chart.b2trading.io/*",
+    "https://ws.b2trading.io/*"
+  ],
+  "action": {
+    "default_title": "Inflitrus Signals",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://traderoom.b2trading.io/*",
+        "https://chart.b2trading.io/*"
+      ],
+      "js": [
+        "src/main/injected-main.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://traderoom.b2trading.io/*",
+        "https://chart.b2trading.io/*"
+      ],
+      "js": [
+        "src/content/content-loader.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/main/*",
+        "src/content/*",
+        "src/market/*",
+        "src/indicators/*",
+        "src/strategy/*",
+        "src/sidepanel/*",
+        "src/utils/*",
+        "src/ui/*",
+        "src/ui/i18n/*",
+        "src/ui/components/*",
+        "assets/fonts/*",
+        "assets/logo/*"
+      ],
+      "matches": [
+        "https://traderoom.b2trading.io/*",
+        "https://chart.b2trading.io/*"
+      ]
+    }
+  ]
+}

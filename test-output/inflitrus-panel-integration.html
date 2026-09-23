@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Panel integration QA</title><style>html,body{margin:0;min-height:100%;background:#071216}</style></head><body>
+<script>
+  const listeners=[];
+  globalThis.chrome={
+    runtime:{getURL(path){return new URL(`../${path}`,location.href).href},onMessage:{addListener(fn){listeners.push(fn)}},sendMessage(){return Promise.resolve()}},
+    storage:{local:{get(keys,cb){const data={ifx_onboarding_v1:new URLSearchParams(location.search).get("onboarding")!=="1",oracle_sound_enabled:false,ifx_panel_position_v1:{side:"right",top:16,collapsed:false}};cb(Object.fromEntries((Array.isArray(keys)?keys:[keys]).map((key)=>[key,data[key]])))},set(){return Promise.resolve()}},onChanged:{addListener(){}}}
+  };
+</script>
+<script type="module">
+  import { DiagnosticPanel } from "../src/content/panel.js";
+  const state=new URLSearchParams(location.search).get("state")||"READY";
+  const now=Date.now();
+  const panel=new DiagnosticPanel();
+  setTimeout(()=>panel.update({state,symbol:"AUDCAD_OTC",timeframe:"1 minuto",historyCount:150,lastCandleTime:"10:52:00",lastPrice:"0.89421",gaps:0,wsStatus:"conectado",payout:.92,quantAction:"CALL",quantProbability:.64,edge:.07,quality:.81,regime:"STABLE",updatedAt:now,indicators:{ema9:.89432,ema21:.89410,rsi14:57.8},microstructure:{pressure:.47},quantReasons:["EMA 9 cruzou acima da EMA 21","RSI acima de 50","Candle confirmado"],signalsHistory:[{id:"integration",direction:"CALL",recordedAt:now,timeFormatted:"10:51:00",timeframeSeconds:60,status:"PENDING",strategyName:"Confluencia (4/5)"}],stats:{winRate:64.3,wins:9,losses:5}}),250);
+  window.panel=panel;
+</script></body></html>

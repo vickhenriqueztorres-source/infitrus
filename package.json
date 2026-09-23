@@ -1,0 +1,19 @@
+{
+  "name": "inflitrus-signals",
+  "version": "0.1.0",
+  "description": "Extensión Chrome de análisis técnico local para B2Trading.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/**/*.test.js"
+  },
+  "keywords": [
+    "b2trading",
+    "inflitrus",
+    "signals",
+    "tradingview",
+    "chrome-extension"
+  ],
+  "author": "Tech Lead Oracle Quant",
+  "license": "UNLICENSED",
+  "private": true
+}

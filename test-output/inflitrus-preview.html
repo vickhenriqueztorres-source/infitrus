@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es-419">
+<head><meta charset="utf-8"><title>Inflitrus visual QA</title><style>html,body{margin:0;min-height:100%;background:#071216}body{display:grid;place-items:start center;padding:24px}</style></head>
+<body>
+  <div id="preview"></div>
+  <script type="module">
+    import { createViewModel } from "../src/ui/view-model.js";
+    import { expandedMarkup, compactMarkup } from "../src/ui/components/layout.js";
+    import { WaveRenderer } from "../src/ui/wave.js";
+    const params = new URLSearchParams(location.search);
+    const state = params.get("state") || "ESCANEANDO";
+    const mini = params.get("mini") === "1";
+    const now = Date.now();
+    const data = {
+      state: state === "CONECTANDO" ? "CONNECTING" : state === "CALIBRANDO" ? "SYNCING_HISTORY" : state === "BLOQUEADO" ? "DATA_GAP" : "READY",
+      symbol:"AUDCAD_OTC", timeframe:"1 minuto", historyCount:97, lastCandleTime:"10:52:00", lastPrice:"0.89421", gaps: state === "BLOQUEADO" ? 2 : 0, wsStatus:"conectado", payout:.92,
+      quantAction: state === "SENAL" ? "CALL" : "WAIT", quantProbability:.643, edge:.071, quality:.81, regime:"STABLE", updatedAt:now,
+      indicators:{ema9:.89432,ema21:.89410,rsi14:57.8}, microstructure:{pressure:.47},
+      quantReasons:["EMA 9 cruzou acima da EMA 21","RSI acima de 50","Candle confirmado","Confluência (4/5)"],
+      strategiesResults:[
+        {name:"Bayes jerárquico",action:"CALL",probUp:.67},{name:"KNN adaptativo",action:"CALL",probUp:.61},{name:"Regresión logística",action:"CALL",probUp:.64},{name:"Dinámica temporal",action:"WAIT",probUp:.51},{name:"Microestructura",action:"CALL",probUp:.69}
+      ],
+      signalsHistory:[{id:"preview",direction:"CALL",recordedAt:now-400,timeFormatted:"10:51:00",timeframeSeconds:60,status:"SETTLED",result:"WIN",pnlUnits:.8,strategyName:"Confluencia (4/5)"}],
+      stats:{winRate:64.3,wins:9,losses:5}
+    };
+    const vm = createViewModel(data,{remainingSeconds:37,progressPct:38},{now,debugState:state});
+    const host = document.getElementById("preview");
+    const shadow = host.attachShadow({mode:"open"});
+    const css = await Promise.all(["../src/ui/tokens.css","../src/ui/base.css"].map((url)=>fetch(url).then((response)=>response.text())));
+    shadow.innerHTML = `<style>${css.join("\n")}</style>${mini ? compactMarkup(vm) : expandedMarkup(vm,{collapsed:false,side:"right",soundEnabled:true,openTab:null,settingsOpen:false,payoutOpen:false},[])}`;
+    const canvas = shadow.querySelector("[data-wave]");
+    if (canvas) new WaveRenderer(canvas,{state:vm.wave,compact:mini});
+  </script>
+</body>
+</html>
