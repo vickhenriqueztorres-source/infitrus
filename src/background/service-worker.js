@@ -41,7 +41,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       tabId: sender.tab?.id || null,
       windowId: sender.tab?.windowId || null,
     });
-    return true;
+    return;
   }
 
   if (message?.type === "ORACLE_ARRANGE_MULTI_WINDOWS") {

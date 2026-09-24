@@ -159,22 +159,31 @@ export class MarketAnalyzer {
   }
 
   init() {
-    // 0. Identifica a aba e janela atuais via Background Service Worker
-    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-      try {
-        chrome.runtime.sendMessage({ type: "ORACLE_GET_TAB_INFO" }, (info) => {
-          if (info) {
-            this.tabId = info.tabId || null;
-            this.windowId = info.windowId || null;
-            if (this.tabId) {
-              this.signalAuditor.setTabId(this.tabId);
+    // 0. Identifica a aba e janela atuais via Background Service Worker (com retry defensivo)
+    const fetchTabInfo = (retry = true) => {
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        try {
+          chrome.runtime.sendMessage({ type: "ORACLE_GET_TAB_INFO" }, (info) => {
+            if (chrome.runtime?.lastError) {
+              if (retry) {
+                setTimeout(() => fetchTabInfo(false), 350);
+              }
+              return;
             }
-            logger.setContext({ tabId: this.tabId, symbol: this.currentSymbol });
-            this.updatePanelDisplay({ immediate: true });
-          }
-        });
-      } catch (_) {}
-    }
+            if (info) {
+              this.tabId = info.tabId || null;
+              this.windowId = info.windowId || null;
+              if (this.tabId) {
+                this.signalAuditor.setTabId(this.tabId);
+              }
+              logger.setContext({ tabId: this.tabId, symbol: this.currentSymbol });
+              this.updatePanelDisplay({ immediate: true });
+            }
+          });
+        } catch (_) {}
+      }
+    };
+    fetchTabInfo();
 
     // 1. Escuta eventos da Bridge (com canal)
     initBridgeListener({
@@ -185,15 +194,18 @@ export class MarketAnalyzer {
 
     // 2. Verificação periódica de Heartbeat / Stale feed a cada 2.5s e loop contínuo do SignalLifecycle
     if (typeof window !== "undefined") {
-      setInterval(() => {
+      this._staleInterval = setInterval(() => {
+        if (this._isDestroyed) return;
         this.quality.checkStale(this.currentSymbol, this.timeframeSeconds);
       }, 2500);
 
-      setInterval(() => {
+      this._lifecycleInterval = setInterval(() => {
+        if (this._isDestroyed) return;
         this.tickLifecycle();
       }, 250);
 
-      setInterval(() => {
+      this._perfInterval = setInterval(() => {
+        if (this._isDestroyed) return;
         this._logPerfMetrics();
       }, 60000);
     }
@@ -214,7 +226,22 @@ export class MarketAnalyzer {
       });
     }
 
-    logger.info("SISTEMA", `Analyzer ativo em iframe gráfico de cálculo`);
+    const isIframe = typeof window !== "undefined" && window.self !== window.top;
+    const host = typeof window !== "undefined" ? window.location.hostname : "local";
+    logger.info(
+      "SISTEMA",
+      isIframe
+        ? `Analyzer ativo em iframe gráfico de cálculo (${host})`
+        : `Analyzer ativo em frame principal (fallback ${host})`
+    );
+  }
+
+  destroy() {
+    this._isDestroyed = true;
+    if (this._staleInterval) clearInterval(this._staleInterval);
+    if (this._lifecycleInterval) clearInterval(this._lifecycleInterval);
+    if (this._perfInterval) clearInterval(this._perfInterval);
+    if (this._pendingStateSaveTimeout) clearTimeout(this._pendingStateSaveTimeout);
   }
 
   _recordEvalDuration(ms) {
@@ -262,7 +289,7 @@ export class MarketAnalyzer {
     const currentNowSec = nowSec ?? marketClock.nowSec();
     let currentDataOk = dataOk;
     if (currentDataOk === null) {
-      const report = this.quality.evaluate();
+      const report = this.quality.getReport(pair, tf);
       const isReady = this.store.isReady(pair, tf);
       currentDataOk = isReady && report.state === MarketState.READY;
     }
@@ -359,39 +386,42 @@ export class MarketAnalyzer {
 
   processRealtimePayload(payload) {
     const active = this.activeChannel.get();
-    const activePair = active?.pair || this.currentSymbol;
+    const activePair = active?.pair || null;
     const activeTf = active?.tf || this.timeframeSeconds;
 
     // Se o timeframe ativo não for M1 (60s), não gera sinal
     if (activeTf !== LIFECYCLE.SUPPORTED_TF_SEC) {
-      this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair: activePair, tf: activeTf };
+      this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair: activePair || this.currentSymbol, tf: activeTf };
       return;
     }
 
     const rawSym = payload.pair || payload.symbol;
-    const incomingSym = (rawSym && typeof rawSym === "string") ? rawSym.trim().toUpperCase() : activePair;
+    const incomingSym = (rawSym && typeof rawSym === "string") ? rawSym.trim().toUpperCase() : (activePair || this.currentSymbol);
 
-    // Descarta ticks de outros ativos quando já há um ativo ativo definido (I-03, I-10)
+    // Se há canal ativo explicitamente registrado, descarta ticks de outros ativos (I-03, I-10)
     if (activePair && incomingSym && incomingSym !== activePair) {
       return;
     }
 
-    const sym = incomingSym || activePair;
-    this.currentSymbol = sym;
-    this.activeSymbols.clear();
-    this.activeSymbols.add(sym);
+    const sym = activePair || incomingSym || this.currentSymbol;
+    if (sym && sym !== this.currentSymbol) {
+      this.currentSymbol = sym;
+      this.activeSymbols.clear();
+      this.activeSymbols.add(sym);
+      logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
+    }
 
-    const candles = normalizeWebSocketPayload(payload, this.timeframeSeconds, { symbol: incomingSym });
+    const candles = normalizeWebSocketPayload(payload, this.timeframeSeconds, { symbol: sym });
     if (!candles || candles.length === 0) return;
 
     for (const candle of candles) {
       if (!isValidCandle(candle)) {
-        logger.warn("FEED", `Candle inválido rejeitado: [${candle?.symbol || incomingSym}]`);
+        logger.warn("FEED", `Candle inválido rejeitado: [${candle?.symbol || sym}]`);
         continue;
       }
 
-      const sym = candle.symbol || incomingSym;
-      this.activeSymbols.add(sym);
+      const candleSym = candle.symbol || sym;
+      this.activeSymbols.add(candleSym);
 
       // 1. Registra tick no IntraminuteTracker
       this.intraminuteTracker.recordTick(
@@ -464,7 +494,7 @@ export class MarketAnalyzer {
     this.updatePanelDisplay();
   }
 
-  updatePanelDisplay() {
+  updatePanelDisplay({ immediate = false } = {}) {
     const symbolsMap = {};
     const symbolsList = Array.from(this.activeSymbols.size > 0 ? this.activeSymbols : [this.currentSymbol]);
 
@@ -689,18 +719,64 @@ export class MarketAnalyzer {
   }
 }
 
-export const COMPUTE_HOSTS = ["chart.b2trading.io"];
+export const COMPUTE_HOSTS = ["chart.b2trading.io", "traderoom.b2trading.io"];
 
-export function isComputeFrame(hostname = "") {
+export function isComputeFrame(hostname = "", { hasChartIframe = null, isTop = null } = {}) {
   const host = hostname || (typeof location !== "undefined" ? location.hostname : "");
-  return COMPUTE_HOSTS.includes(host);
+  if (!host) return false;
+
+  // Iframe dedicado do gráfico é sempre frame preferencial de cálculo
+  if (host === "chart.b2trading.io") {
+    return true;
+  }
+
+  // Página principal da corretora (traderoom.b2trading.io)
+  if (host === "traderoom.b2trading.io") {
+    if (hasChartIframe === true) {
+      return false; // cede cálculo para o iframe se este existir
+    }
+    if (hasChartIframe === false) {
+      return true; // assume como fallback
+    }
+
+    // No navegador real (DOM disponível):
+    if (typeof window !== "undefined" && typeof document !== "undefined") {
+      const topWin = isTop !== null ? isTop : (window.self === window.top);
+      if (!topWin) return false; // iframes aninhados secundários não calculam
+
+      // Se a página NÃO possui iframe de gráfico, o frame TOP assume como fallback
+      const chartIframeFound = Boolean(document.querySelector('iframe[src*="chart.b2trading.io"]'));
+      return !chartIframeFound;
+    }
+
+    // Ambiente de teste sem DOM e sem opções explícitas (mantém assinatura de isolamento)
+    return false;
+  }
+
+  return false;
 }
 
-// Inicialização automática do Analyzer no content script (apenas no iframe do gráfico)
+// Inicialização automática do Analyzer no content script
 if (typeof window !== "undefined") {
   const host = window.location.hostname;
   if (isComputeFrame(host)) {
     window.__oracleAnalyzer = new MarketAnalyzer();
+
+    // Se este frame for o iframe do gráfico, anuncia para o frame TOP para que ele ceda o cálculo
+    if (window.self !== window.top && host === "chart.b2trading.io") {
+      try {
+        window.top.postMessage({ type: "ORACLE_CHART_COMPUTE_ACTIVE" }, "*");
+      } catch (_) {}
+    } else if (window.self === window.top) {
+      // Se estiver no frame TOP (fallback), escuta caso o iframe do gráfico apareça e reclame o cálculo
+      window.addEventListener("message", (ev) => {
+        if (ev.data?.type === "ORACLE_CHART_COMPUTE_ACTIVE" && window.__oracleAnalyzer) {
+          logger.info("SISTEMA", "Iframe chart.b2trading.io ativo detectado. Frame TOP cedendo cálculo.");
+          window.__oracleAnalyzer.destroy();
+          window.__oracleAnalyzer = null;
+        }
+      });
+    }
   } else {
     let warned = false;
     initBridgeListener({

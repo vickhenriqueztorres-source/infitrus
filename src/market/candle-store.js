@@ -238,6 +238,17 @@ export class CandleStore {
   }
 
   /**
+   * Verifica se o store está pronto para análise.
+   * @param {string} symbol
+   * @param {number} timeframeSeconds
+   * @param {number} [minCount=10]
+   * @returns {boolean}
+   */
+  isReady(symbol, timeframeSeconds, minCount = 10) {
+    return this.hasSufficientData(symbol, timeframeSeconds, minCount);
+  }
+
+  /**
    * Limpa a série em memória.
    * @param {string} symbol
    * @param {number} timeframeSeconds
