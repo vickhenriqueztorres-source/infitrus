@@ -101,16 +101,21 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
   let inTradeProgress = null;
   if (trade && trade.phase === "IN_TRADE") {
     const dir = trade.direction || "CALL";
+    const dirSymbol = dir === "CALL" ? "CALL ▲" : "PUT ▼";
     const targetTs = trade.targetTs != null ? trade.targetTs : Math.floor(nowSec / tf) * tf;
     const remTrade = Math.max(0, Math.ceil((targetTs + 60) - nowSec));
     inTradeSecondary = `En operación ${dir} · expira en ${remTrade}s`;
     inTradeProgress = Math.min(100, Math.max(0, ((60 - remTrade) / 60) * 100));
 
-    // Se o snapshot passado foi puramente o objeto IN_TRADE (não composite)
-    if (!isComposite && snapshot.phase === "IN_TRADE") {
+    // Se NÃO há PRE_SIGNAL ativo na vela atual, a operação em curso É O CARD PRINCIPAL!
+    if (!current || current.phase !== "PRE_SIGNAL") {
+      const entryText = Number.isFinite(trade.entryPrice)
+        ? `Entrada: ${Number(trade.entryPrice).toFixed(5)}`
+        : (inTradeSecondary || "Operación en curso en el broker");
+
       return {
-        primaryText: inTradeSecondary,
-        secondaryText: null,
+        primaryText: `OPERACIÓN EN CURSO — ${dirSymbol} · expira en ${remTrade}s`,
+        secondaryText: entryText,
         phase: "IN_TRADE",
         direction: dir,
         secondsRemaining: remTrade,
@@ -123,16 +128,20 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
     }
   }
 
-  // 3. SETTLED (Resultado mantido por até 8 s)
+  // 3. SETTLED (Resultado mantido por até 10 s)
   if (lastResult && lastResult.phase === "SETTLED") {
     const settledAt = lastResult.settledAt || (lastResult.targetTs ? lastResult.targetTs + 60 : nowSec);
-    const holdSec = 8;
+    const holdSec = 10;
     if (nowSec - settledAt <= holdSec || (!isComposite && snapshot.phase === "SETTLED")) {
       const resStr = formatResult(lastResult.result);
       const dir = lastResult.direction || null;
+      const dirSymbol = dir ? (dir === "CALL" ? "CALL ▲" : "PUT ▼") : "";
+      const priceText = Number.isFinite(lastResult.entryPrice) && Number.isFinite(lastResult.closePrice)
+        ? `Entrada: ${Number(lastResult.entryPrice).toFixed(5)} → Cierre: ${Number(lastResult.closePrice).toFixed(5)}`
+        : inTradeSecondary;
       return {
-        primaryText: `Resultado: ${resStr}`,
-        secondaryText: inTradeSecondary,
+        primaryText: `Resultado: ${resStr}${dirSymbol ? ` (${dirSymbol})` : ""}`,
+        secondaryText: priceText,
         phase: "SETTLED",
         direction: dir,
         secondsRemaining: 0,
@@ -151,12 +160,16 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
     const dirSymbol = dir === "CALL" ? "CALL ▲" : "PUT ▼";
     const targetTs = current.targetTs != null ? current.targetTs : Math.floor(nowSec / tf) * tf + tf;
     const rem = Math.max(0, Math.ceil(targetTs - nowSec));
-    // Janela de pré-sinal: de 52s a 60s (8s)
-    const progressPct = Math.min(100, Math.max(0, ((8 - rem) / 8) * 100));
+    // Janela de pré-sinal: de 45s a 60s (15s)
+    const progressPct = Math.min(100, Math.max(0, ((15 - rem) / 15) * 100));
+
+    const targetDate = new Date(targetTs * 1000);
+    const targetTime = targetDate.toTimeString().slice(0, 5);
+    const preSecondary = inTradeSecondary || `Entrada al segundo :00 (vela ${targetTime})`;
 
     return {
       primaryText: `PRE-SEÑAL ${dirSymbol} · entra en ${rem}s`,
-      secondaryText: inTradeSecondary,
+      secondaryText: preSecondary,
       phase: "PRE_SIGNAL",
       direction: dir,
       secondsRemaining: rem,
@@ -228,9 +241,16 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
   const s = nowSec - formingTs;
   const progressPct = inTradeProgress ?? Math.min(100, Math.max(0, (s / 45) * 100));
 
+  let scanSecondary = inTradeSecondary;
+  if (!scanSecondary && lastResult && lastResult.result) {
+    const lastResStr = formatResult(lastResult.result);
+    const lastDir = lastResult.direction ? ` ${lastResult.direction}` : "";
+    scanSecondary = `Última operación: ${lastResStr}${lastDir}`;
+  }
+
   return {
     primaryText: `Escuchando ${pair} · decisión en ${rem}s`,
-    secondaryText: inTradeSecondary,
+    secondaryText: scanSecondary,
     phase: "SCANNING",
     direction: null,
     secondsRemaining: rem,

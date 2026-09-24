@@ -97,13 +97,15 @@ function updateClockOnlyUI() {
   // 1. Classes do Card e acessibilidade aria-live (assertive em ENTRY_NOW, polite no resto)
   const card = document.getElementById("signal-card");
   if (card) {
-    card.classList.remove("is-call", "is-put", "is-wait", "is-execute");
+    card.classList.remove("is-call", "is-put", "is-wait", "is-execute", "is-in-trade");
     card.setAttribute("aria-live", cardData.ariaLive);
 
     if (cardData.phase === "ENTRY_NOW") {
       card.classList.add("is-execute", cardData.direction === "CALL" ? "is-call" : "is-put");
     } else if (cardData.phase === "PRE_SIGNAL") {
       card.classList.add(cardData.direction === "CALL" ? "is-call" : "is-put");
+    } else if (cardData.phase === "IN_TRADE") {
+      card.classList.add("is-in-trade", cardData.direction === "CALL" ? "is-call" : "is-put");
     } else if (cardData.phase === "SETTLED") {
       card.classList.add(cardData.badgeClass === "call" ? "is-call" : cardData.badgeClass === "put" ? "is-put" : "is-wait");
     } else {
@@ -132,7 +134,7 @@ function updateClockOnlyUI() {
   // 4. Ícone do Card
   const iconEl = document.getElementById("signal-icon");
   if (iconEl) {
-    if (cardData.phase === "ENTRY_NOW" || cardData.phase === "PRE_SIGNAL") {
+    if (cardData.phase === "ENTRY_NOW" || cardData.phase === "PRE_SIGNAL" || cardData.phase === "IN_TRADE") {
       iconEl.textContent = cardData.direction === "CALL" ? "▲" : "▼";
     } else if (cardData.phase === "SETTLED") {
       iconEl.textContent = cardData.badgeClass === "call" ? "✓" : cardData.badgeClass === "put" ? "✗" : "―";
@@ -162,13 +164,13 @@ function updateClockOnlyUI() {
   const timingLabel = document.getElementById("entry-timing-label");
   if (timingLabel) {
     if (cardData.phase === "ENTRY_NOW") {
-      timingLabel.innerHTML = `<span style="color:#3FE0C5;font-weight:800">¡ENTRA AHORA EN LA APERTURA!</span>`;
+      timingLabel.innerHTML = `<span style="color:#3FE0C5;font-weight:800;letter-spacing:0.05em">¡ENTRA AHORA EN LA APERTURA!</span>`;
     } else if (cardData.phase === "PRE_SIGNAL") {
-      timingLabel.innerHTML = `EN LA APERTURA (en ${cardData.secondsRemaining}s)`;
+      timingLabel.innerHTML = `AL SEGUNDO :00 DE LA PRÓXIMA VELA (en ${cardData.secondsRemaining}s)`;
     } else if (cardData.phase === "IN_TRADE") {
-      timingLabel.innerHTML = `OPERACIÓN EN CURSO`;
+      timingLabel.innerHTML = `<span style="font-weight:700">OPERACIÓN EN CURSO (${cardData.secondsRemaining}s para expirar)</span>`;
     } else if (cardData.phase === "SETTLED") {
-      timingLabel.innerHTML = `OPERACIÓN LIQUIDADA`;
+      timingLabel.innerHTML = `OPERACIÓN LIQUIDADA (${cardData.badgeText})`;
     } else {
       timingLabel.innerHTML = `EN LA APERTURA DE LA PRÓXIMA VELA`;
     }

@@ -139,9 +139,49 @@ test("formatLifecycleCard: ENTRY_NOW usa destaque máximo, contagem de 5s e aria
   assert.equal(cardClamp.secondsRemaining, 0);
 });
 
-test("formatLifecycleCard: IN_TRADE exibe linha secundária e retorna card principal ao estado da vela atual", () => {
+test("formatLifecycleCard: IN_TRADE mantém o card principal na operação até o término da vela", () => {
   const tradeTargetTs = 1700000060;
   const currentFormingTs = tradeTargetTs; // Vela em que o trade está correndo (0 a 60s)
+
+  const snapshot = {
+    pair: "EURUSD",
+    trade: {
+      pair: "EURUSD",
+      tf: 60,
+      targetTs: tradeTargetTs,
+      phase: "IN_TRADE",
+      direction: "PUT",
+      entryPrice: 1.08500,
+    },
+    current: {
+      pair: "EURUSD",
+      tf: 60,
+      formingTs: currentFormingTs,
+      targetTs: currentFormingTs + 60,
+      phase: "SCANNING",
+    },
+  };
+
+  // Aos 18s da nova vela: faltam 42s para expirar o trade (targetTs + 60)
+  // O card principal PERMANECE em IN_TRADE com direção PUT
+  const card = formatLifecycleCard(snapshot, tradeTargetTs + 18);
+  assert.equal(card.phase, "IN_TRADE");
+  assert.equal(card.direction, "PUT");
+  assert.equal(card.primaryText, "OPERACIÓN EN CURSO — PUT ▼ · expira en 42s");
+  assert.equal(card.secondaryText, "Entrada: 1.08500");
+  assert.equal(card.badgeClass, "put");
+  assert.equal(card.badgeText, "EN OPERACIÓN · PUT");
+  assert.equal(card.secondsRemaining, 42);
+
+  // Clamp na expiração
+  const cardClamp = formatLifecycleCard(snapshot, tradeTargetTs + 65);
+  assert.equal(cardClamp.secondsRemaining, 0);
+  assert.ok(cardClamp.primaryText.includes("expira en 0s"));
+});
+
+test("formatLifecycleCard: IN_TRADE com novo PRE_SIGNAL na mesma vela exibe PRE_SIGNAL como primário e IN_TRADE como secundário", () => {
+  const tradeTargetTs = 1700000060;
+  const currentFormingTs = tradeTargetTs;
 
   const snapshot = {
     pair: "EURUSD",
@@ -157,20 +197,17 @@ test("formatLifecycleCard: IN_TRADE exibe linha secundária e retorna card princ
       tf: 60,
       formingTs: currentFormingTs,
       targetTs: currentFormingTs + 60,
-      phase: "SCANNING",
+      phase: "PRE_SIGNAL",
+      direction: "CALL",
     },
   };
 
-  // Aos 18s da nova vela: faltam 42s para expirar o trade (targetTs + 60)
-  // E o card principal escuta a vela atual (faltam 27s para 45s)
-  const card = formatLifecycleCard(snapshot, tradeTargetTs + 18);
-  assert.equal(card.phase, "SCANNING");
-  assert.equal(card.primaryText, "Escuchando EURUSD · decisión en 27s");
-  assert.equal(card.secondaryText, "En operación PUT · expira en 42s");
-
-  // Clamp na expiração
-  const cardClamp = formatLifecycleCard(snapshot, tradeTargetTs + 65);
-  assert.ok(cardClamp.secondaryText.includes("expira en 0s"));
+  // Aos 52s: novo PRE_SIGNAL de CALL para a próxima vela, enquanto PUT está expirando em 8s
+  const card = formatLifecycleCard(snapshot, tradeTargetTs + 52);
+  assert.equal(card.phase, "PRE_SIGNAL");
+  assert.equal(card.direction, "CALL");
+  assert.equal(card.primaryText, "PRE-SEÑAL CALL ▲ · entra en 8s");
+  assert.equal(card.secondaryText, "En operación PUT · expira en 8s");
 });
 
 test("formatLifecycleCard: SETTLED exibe resultado da operação (GANADA, PERDIDA, EMPATE)", () => {

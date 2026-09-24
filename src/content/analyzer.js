@@ -200,7 +200,18 @@ export class MarketAnalyzer {
           `🚀 PRE-SEÑAL M1 [${lc.direction} ${lc.pair} - ${lc.snapshot?.subStrategy || "Quant"}]: Prob: ${((lc.snapshot?.probability || 0.5) * 100).toFixed(1)}% | Entrada no início da próxima vela`
         );
         this.updatePanelDisplay({ immediate: true });
-      } else if (event === Phase.ENTRY_NOW || event === Phase.IN_TRADE) {
+      } else if (event === Phase.ENTRY_NOW) {
+        logger.success(
+          "SINAL",
+          `⚡ ENTRA AHORA [${lc.direction} ${lc.pair}]: Apertura confirmada | Ejecute en el broker inmediatamente`
+        );
+        this.updatePanelDisplay({ immediate: true });
+      } else if (event === Phase.IN_TRADE) {
+        const entryStr = Number.isFinite(lc.entryPrice) ? Number(lc.entryPrice).toFixed(5) : "---";
+        logger.info(
+          "SINAL",
+          `⏳ EN OPERACIÓN [${lc.direction} ${lc.pair}]: Entrada ${entryStr} | Aguardando expiración de la vela`
+        );
         this.updatePanelDisplay({ immediate: true });
       } else if (event === Phase.SETTLED) {
         this.signalAuditor.settle(lc.id, {
@@ -210,6 +221,25 @@ export class MarketAnalyzer {
         });
         if (lc.result === "WIN" || lc.result === "LOSS") {
           this.registry.get(lc.pair).recordOutcome(lc.snapshot, lc.result === "WIN");
+        }
+        const stats = this.signalAuditor.getStats();
+        const payout = this.registry.get(lc.pair).payout || 0.80;
+        const pnlStr = lc.result === "WIN" ? `+${payout.toFixed(2)}` : lc.result === "LOSS" ? "-1.00" : "0.00";
+        const entryStr = Number.isFinite(lc.entryPrice) ? Number(lc.entryPrice).toFixed(5) : "---";
+        const closeStr = Number.isFinite(lc.closePrice) ? Number(lc.closePrice).toFixed(5) : "---";
+
+        if (lc.result === "WIN") {
+          logger.success(
+            "SINAL",
+            `✓ RESULTADO [${lc.direction} ${lc.pair}]: WIN (${pnlStr} un) | ${entryStr} → ${closeStr} | WR: ${stats.winRate}% (${stats.wins}V/${stats.losses}D)`
+          );
+        } else if (lc.result === "LOSS") {
+          logger.error(
+            "SINAL",
+            `✗ RESULTADO [${lc.direction} ${lc.pair}]: LOSS (${pnlStr} un) | ${entryStr} → ${closeStr} | WR: ${stats.winRate}% (${stats.wins}V/${stats.losses}D)`
+          );
+        } else {
+          logger.info("SINAL", `― RESULTADO [${lc.direction} ${lc.pair}]: DOJI (Empate) | ${entryStr} → ${closeStr}`);
         }
         this.updatePanelDisplay({ immediate: true });
       } else if (event === Phase.CANCELLED) {
