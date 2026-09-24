@@ -31,15 +31,107 @@ import { marketClock } from "../utils/market-clock.js";
 import { logger } from "../utils/logger.js";
 import { initBridgeListener } from "./bridge.js";
 
+/**
+ * Extrai o símbolo de um payload heterogêneo de forma abrangente.
+ * Suporta pair, symbol, asset, ticker e envelopes messages/data.
+ *
+ * @param {any} payload
+ * @returns {string|null} Símbolo em caixa alta ou null
+ */
+export function extractSymbolFromPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const direct = payload.pair || payload.symbol || payload.asset || payload.ticker;
+  if (direct && typeof direct === "string") return direct.trim().toUpperCase();
+  if (Array.isArray(payload.messages) && payload.messages.length > 0) {
+    for (const m of payload.messages) {
+      if (!m || typeof m !== "object") continue;
+      const s = m.pair || m.symbol || m.asset || m.ticker || m.data?.pair || m.data?.symbol || m.data?.asset;
+      if (s && typeof s === "string") return s.trim().toUpperCase();
+    }
+  }
+  if (payload.data && typeof payload.data === "object") {
+    const d = payload.data;
+    const s = d.pair || d.symbol || d.asset || d.ticker;
+    if (s && typeof s === "string") return s.trim().toUpperCase();
+  }
+  return null;
+}
+
+/**
+ * Inspeciona o DOM da corretora para identificar o ativo atualmente aberto no gráfico.
+ * Suporta headers do TradingView (.pane-legend-title__container, data-name="legend-source-title"),
+ * abas de ativos do Traderoom e título do documento.
+ *
+ * @returns {string|null} Símbolo em caixa alta ou null
+ */
+export function detectActiveSymbolFromDOM() {
+  if (typeof document === "undefined") return null;
+  try {
+    // 1. Legend do TradingView (seja no frame local ou no top)
+    const legendSelectors = [
+      '[data-name="legend-source-title"]',
+      '.pane-legend-title__container',
+      '.chart-data-window-body',
+      'div[class*="pane-legend-title"]',
+      'div[class*="legendTitle"]',
+    ];
+    for (const sel of legendSelectors) {
+      const el = document.querySelector(sel);
+      if (el && el.textContent) {
+        const text = el.textContent.trim();
+        const match = /^([A-Z0-9_]+)/i.exec(text);
+        if (match && match[1] && match[1].length >= 3) {
+          return match[1].toUpperCase();
+        }
+      }
+    }
+
+    // 2. Abas ativas da corretora (Traderoom)
+    const tabSelectors = [
+      '[class*="asset-tab"][class*="active"]',
+      '[class*="tab"][class*="active"]',
+      '[class*="tab"][class*="selected"]',
+      '[class*="itemActive"]',
+      '[class*="current-asset"]',
+    ];
+    for (const sel of tabSelectors) {
+      const el = document.querySelector(sel);
+      if (el && el.textContent) {
+        const text = el.textContent.trim();
+        const clean = text.replace(/[\/\s-]+/g, "_").toUpperCase();
+        const match = /^([A-Z0-9_]+)/.exec(clean);
+        if (match && match[1] && match[1].length >= 3) {
+          return match[1];
+        }
+      }
+    }
+
+    // 3. Document title (se o traderoom colocar o par no title)
+    if (document.title) {
+      const titleMatch = /([A-Z0-9_]{3,}(?:_OTC)?)/i.exec(document.title);
+      if (titleMatch && titleMatch[1]) {
+        const candidate = titleMatch[1].toUpperCase();
+        if (candidate !== "B2TRADING" && candidate !== "TRADING" && candidate !== "BROKER") {
+          return candidate;
+        }
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 export class MarketAnalyzer {
   constructor() {
     this.timeframeSeconds = 60; // Padrão M1
-    this.currentSymbol = "EURUSD";
-    this.activeSymbols = new Set(["EURUSD"]);
+    const initialSym = detectActiveSymbolFromDOM() || "EURUSD";
+    this.currentSymbol = initialSym;
+    this.activeSymbols = new Set([initialSym]);
     this.lastPrices = new Map();
     this._lastLoggedPrices = new Map();
     this.store = new CandleStore({ maxCandlesPerSeries: 500 });
     this.activeChannel = new ActiveChannel();
+    this._lastTickReceivedAt = 0;
+    this._disconnectTimer = null;
 
     if (typeof window !== "undefined") {
       candleTimer.start();
@@ -158,6 +250,19 @@ export class MarketAnalyzer {
     this.init();
   }
 
+  _switchSymbol(nextPair, tf = 60) {
+    if (!nextPair || nextPair === this.currentSymbol) return;
+    const prev = this.currentSymbol;
+    this.lifecycle.cancelPair(prev, "ASSET_CHANGED");
+    this.activeSymbols.delete(prev);
+    this.currentSymbol = nextPair;
+    this.timeframeSeconds = tf || 60;
+    this.activeSymbols.clear();
+    this.activeSymbols.add(nextPair);
+    logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
+    this.updatePanelDisplay({ immediate: true });
+  }
+
   init() {
     // 0. Identifica a aba e janela atuais via Background Service Worker (com retry defensivo)
     const fetchTabInfo = (retry = true) => {
@@ -192,12 +297,20 @@ export class MarketAnalyzer {
       onChannel: (ch) => this.activeChannel.onChannel(ch),
     });
 
-    // 2. Verificação periódica de Heartbeat / Stale feed a cada 2.5s e loop contínuo do SignalLifecycle
+    // 2. Verificação periódica de Heartbeat / Stale feed a cada 2.5s, detecção no DOM e loop contínuo do SignalLifecycle
     if (typeof window !== "undefined") {
       this._staleInterval = setInterval(() => {
         if (this._isDestroyed) return;
         this.quality.checkStale(this.currentSymbol, this.timeframeSeconds);
       }, 2500);
+
+      this._domCheckInterval = setInterval(() => {
+        if (this._isDestroyed) return;
+        const domSym = detectActiveSymbolFromDOM();
+        if (domSym && !this.activeChannel.get() && domSym !== this.currentSymbol) {
+          this._switchSymbol(domSym);
+        }
+      }, 2000);
 
       this._lifecycleInterval = setInterval(() => {
         if (this._isDestroyed) return;
@@ -239,9 +352,11 @@ export class MarketAnalyzer {
   destroy() {
     this._isDestroyed = true;
     if (this._staleInterval) clearInterval(this._staleInterval);
+    if (this._domCheckInterval) clearInterval(this._domCheckInterval);
     if (this._lifecycleInterval) clearInterval(this._lifecycleInterval);
     if (this._perfInterval) clearInterval(this._perfInterval);
     if (this._pendingStateSaveTimeout) clearTimeout(this._pendingStateSaveTimeout);
+    if (this._disconnectTimer) clearTimeout(this._disconnectTimer);
   }
 
   _recordEvalDuration(ms) {
@@ -333,14 +448,35 @@ export class MarketAnalyzer {
   }
 
   handleSocketStatus(info) {
-    this.socketStatus = info.status === "connected" ? "conectado" : "desconectado";
     if (info.status === "connected") {
+      if (this._disconnectTimer) {
+        clearTimeout(this._disconnectTimer);
+        this._disconnectTimer = null;
+      }
+      this.socketStatus = "conectado";
       logger.success("WS", "WebSocket conectado ao stream de mercado (wss://ws.b2trading.io/ws)");
+      this.updatePanelDisplay();
     } else if (info.status === "closed") {
-      logger.warn("WS", "Conexão WebSocket encerrada. Aguardando reconexão...");
-      this.quality.onDisconnect(this.currentSymbol, this.timeframeSeconds);
+      // Se recebemos ticks nos últimos 5 segundos, concede janela de carência de 4s
+      // antes de rebaixar a qualidade para STALE / RECONNECTING (evita oscilação de reconexão transitória)
+      const recentTicks = Date.now() - (this._lastTickReceivedAt || 0) < 5000;
+      if (recentTicks) {
+        if (!this._disconnectTimer) {
+          this._disconnectTimer = setTimeout(() => {
+            this._disconnectTimer = null;
+            this.socketStatus = "desconectado";
+            logger.warn("WS", "Conexão WebSocket encerrada. Aguardando reconexão...");
+            this.quality.onDisconnect(this.currentSymbol, this.timeframeSeconds);
+            this.updatePanelDisplay();
+          }, 4000);
+        }
+      } else {
+        this.socketStatus = "desconectado";
+        logger.warn("WS", "Conexão WebSocket encerrada. Aguardando reconexão...");
+        this.quality.onDisconnect(this.currentSymbol, this.timeframeSeconds);
+        this.updatePanelDisplay();
+      }
     }
-    this.updatePanelDisplay();
   }
 
   handleMarketEvent(event) {
@@ -366,10 +502,7 @@ export class MarketAnalyzer {
 
     const detectedSym = bars[0].symbol;
     if (detectedSym && detectedSym !== this.currentSymbol) {
-      this.currentSymbol = detectedSym;
-      this.activeSymbols.clear();
-      this.activeSymbols.add(detectedSym);
-      logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
+      this._switchSymbol(detectedSym, targetTf);
     }
 
     this.store.ingestBatch(bars);
@@ -385,6 +518,15 @@ export class MarketAnalyzer {
   }
 
   processRealtimePayload(payload) {
+    this._lastTickReceivedAt = Date.now();
+    if (this._disconnectTimer) {
+      clearTimeout(this._disconnectTimer);
+      this._disconnectTimer = null;
+    }
+    if (this.socketStatus !== "conectado") {
+      this.socketStatus = "conectado";
+    }
+
     const active = this.activeChannel.get();
     const activePair = active?.pair || null;
     const activeTf = active?.tf || this.timeframeSeconds;
@@ -395,8 +537,8 @@ export class MarketAnalyzer {
       return;
     }
 
-    const rawSym = payload.pair || payload.symbol;
-    const incomingSym = (rawSym && typeof rawSym === "string") ? rawSym.trim().toUpperCase() : (activePair || this.currentSymbol);
+    const extractedSym = extractSymbolFromPayload(payload);
+    const incomingSym = extractedSym || (activePair || this.currentSymbol);
 
     // Se há canal ativo explicitamente registrado, descarta ticks de outros ativos (I-03, I-10)
     if (activePair && incomingSym && incomingSym !== activePair) {
@@ -405,10 +547,7 @@ export class MarketAnalyzer {
 
     const sym = activePair || incomingSym || this.currentSymbol;
     if (sym && sym !== this.currentSymbol) {
-      this.currentSymbol = sym;
-      this.activeSymbols.clear();
-      this.activeSymbols.add(sym);
-      logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
+      this._switchSymbol(sym, this.timeframeSeconds);
     }
 
     const candles = normalizeWebSocketPayload(payload, this.timeframeSeconds, { symbol: sym });

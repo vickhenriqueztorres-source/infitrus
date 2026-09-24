@@ -81,24 +81,58 @@
   if (typeof window.WebSocket === "function") {
     const OriginalWebSocket = window.WebSocket;
 
+    function parseChannelString(str) {
+      if (!str || typeof str !== "string") return null;
+      const trimmed = str.trim();
+      // Detecta resolução sufixada: -M1, -1, _1, -1m, _1m, -M5, etc.
+      const resMatch = /[-_](?:M|m)?(\d+)(?:m|s)?$/i.exec(trimmed);
+      if (resMatch) {
+        const pair = trimmed.substring(0, resMatch.index).toUpperCase();
+        const resolutionNum = Number(resMatch[1]);
+        return { pair, tf: resolutionNum * 60 };
+      }
+      // Sem sufixo de resolução explícito: extrai par limpo
+      const cleanMatch = /^([A-Z0-9_]+)/i.exec(trimmed);
+      if (cleanMatch && cleanMatch[1]) {
+        return { pair: cleanMatch[1].toUpperCase(), tf: 60 };
+      }
+      return null;
+    }
+
     const originalSend = OriginalWebSocket.prototype.send;
     OriginalWebSocket.prototype.send = function (data) {
       try {
-        if (typeof data === "string" && data.includes("channel")) {
-          const m = JSON.parse(data);
-          const ch = /^([A-Z0-9_]+)-M(\d+)$/i.exec(m?.channel || "");
-          if (ch && (m.action === "subscribe" || m.action === "unsubscribe")) {
-            window.postMessage(
-              {
-                type: "ORACLE_CHANNEL",
-                sessionId,
-                action: m.action,
-                pair: ch[1].toUpperCase(),
-                tf: Number(ch[2]) * 60,
-                at: Date.now(),
-              },
-              window.location.origin
-            );
+        let strData = typeof data === "string" ? data : "";
+        if (strData) {
+          const firstBracket = strData.search(/[{\[]/);
+          if (firstBracket > 0) {
+            strData = strData.substring(firstBracket);
+          }
+          if (strData.startsWith("{") || strData.startsWith("[")) {
+            let parsed = JSON.parse(strData);
+            if (Array.isArray(parsed) && parsed.length >= 2 && typeof parsed[1] === "object") {
+              parsed = parsed[1];
+            }
+            if (parsed && typeof parsed === "object") {
+              const action = parsed.action || parsed.event || parsed.type;
+              if (action === "subscribe" || action === "unsubscribe") {
+                const rawChannel = parsed.channel || parsed.pair || parsed.symbol || parsed.asset || parsed.ticker || "";
+                const parsedCh = parseChannelString(rawChannel);
+                if (parsedCh && parsedCh.pair) {
+                  window.postMessage(
+                    {
+                      type: "ORACLE_CHANNEL",
+                      sessionId,
+                      action,
+                      pair: parsedCh.pair,
+                      tf: parsedCh.tf || 60,
+                      at: Date.now(),
+                    },
+                    window.location.origin
+                  );
+                }
+              }
+            }
           }
         }
       } catch (_) {}
@@ -108,8 +142,9 @@
     function PatchedWebSocket(url, protocols) {
       const ws = protocols !== undefined ? new OriginalWebSocket(url, protocols) : new OriginalWebSocket(url);
       const sanitizedUrl = sanitizeUrl(String(url));
+      const isMarketWs = sanitizedUrl.includes("ws.b2trading.io") || sanitizedUrl.includes("/ws");
 
-      function processReceivedData(rawData) {
+      function processReceivedData(rawData, receivedAt = Date.now()) {
         if (!rawData) return;
 
         // Suporte assíncrono para Blob
@@ -179,8 +214,9 @@
       }
 
       // Anexa ouvintes passivos DIRETAMENTE via Prototype Nativo do WebSocket
-      // Mantém ws.onmessage e ws.addEventListener da corretora 100% nativos e intocados
+      // Filtra apenas WebSockets de mercado para evitar oscilações por sockets secundários de terceiros
       OriginalWebSocket.prototype.addEventListener.call(ws, "open", () => {
+        if (!isMarketWs) return;
         try {
           window.postMessage(
             {
@@ -196,6 +232,7 @@
       });
 
       OriginalWebSocket.prototype.addEventListener.call(ws, "close", () => {
+        if (!isMarketWs) return;
         try {
           window.postMessage(
             {
@@ -236,7 +273,7 @@
   function parseHistoryUrlMeta(rawUrl) {
     try {
       const urlObj = new URL(rawUrl, window.location.href);
-      const pair = urlObj.searchParams.get("pair") || urlObj.searchParams.get("symbol") || null;
+      const pair = urlObj.searchParams.get("pair") || urlObj.searchParams.get("symbol") || urlObj.searchParams.get("asset") || urlObj.searchParams.get("ticker") || null;
       const resolution = urlObj.searchParams.get("resolution") || urlObj.searchParams.get("tf") || null;
       const tf = resolution ? Number(resolution) * 60 : null;
       return {
@@ -259,6 +296,12 @@
       if (!hasBars) return;
 
       const meta = parseHistoryUrlMeta(rawUrl);
+      if (!meta.pair) {
+        const bodySym = parsed.pair || parsed.symbol || parsed.asset || parsed.ticker || (parsed.bar && (parsed.bar.pair || parsed.bar.symbol));
+        if (bodySym && typeof bodySym === "string") {
+          meta.pair = bodySym.toUpperCase();
+        }
+      }
       const { sanitized } = sanitizeText(JSON.stringify(parsed));
       dispatchToBridge("history", {
         url: sanitizeUrl(rawUrl),
