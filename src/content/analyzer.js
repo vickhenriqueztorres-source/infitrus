@@ -30,6 +30,7 @@ import { candleTimer } from "../utils/candle-timer.js";
 import { marketClock } from "../utils/market-clock.js";
 import { logger } from "../utils/logger.js";
 import { initBridgeListener } from "./bridge.js";
+import { rec, configureFlightRecorder, generateUUID, hashCandles } from "../diagnostics/flight-recorder.js";
 
 /**
  * Extrai o símbolo de um payload heterogêneo de forma abrangente.
@@ -122,6 +123,7 @@ export function detectActiveSymbolFromDOM() {
 
 export class MarketAnalyzer {
   constructor() {
+    this.instanceId = generateUUID();
     this.timeframeSeconds = 60; // Padrão M1
     this.currentSymbol = null;
     this.activeSymbols = new Set();
@@ -156,6 +158,11 @@ export class MarketAnalyzer {
 
     // UMA fonte de verdade para o par ativo: SOMENTE activeChannel (subscribe/unsubscribe capturado do WebSocket)
     this._unsubChannel = this.activeChannel.onChange((next, prev) => {
+      rec("CHANNEL_CHANGE", {
+        prev: prev ? { pair: prev.pair, tf: prev.tf } : null,
+        next: next ? { pair: next.pair, tf: next.tf } : null,
+        origem: "WS_CHANNEL_EVENT",
+      });
       if (prev && prev.pair && (!next || next.pair !== prev.pair)) {
         this.lifecycle.cancelPair(prev.pair, "ASSET_CHANGED");
         this.activeSymbols.delete(prev.pair);
@@ -175,6 +182,20 @@ export class MarketAnalyzer {
     // Conexão dos Eventos do SignalLifecycle (Único ponto com efeitos colaterais de sinal)
     this._unsubLifecycle = this.lifecycle.onEvent((event, lc) => {
       if (this._isDestroyed) return;
+      rec("LIFECYCLE_EVENT", {
+        event,
+        payload: {
+          id: lc.id,
+          direction: lc.direction,
+          pair: lc.pair,
+          phase: lc.phase,
+          formingTs: lc.formingTs,
+          targetTs: lc.targetTs,
+          probability: lc.snapshot?.probability ?? null,
+          result: lc.result ?? null,
+          reason: lc.reason ?? null,
+        },
+      });
       if (event === Phase.PRE_SIGNAL) {
         this.signalAuditor.recordSignal({
           id: lc.id,
@@ -286,7 +307,24 @@ export class MarketAnalyzer {
     this._lastLightMetricsAt = 0;
     this._cachedLightMetrics = null;
 
+    configureFlightRecorder({
+      ctx: "content",
+      instanceId: this.instanceId,
+      windowId: this.windowId,
+      tabId: this.tabId,
+    });
+
     this.init();
+
+    const host = typeof window !== "undefined" ? window.location.hostname : "local";
+    rec("ANALYZER_NEW", {
+      instanceId: this.instanceId,
+      host,
+      isComputeFrame: isComputeFrame(host),
+      symbol: this.currentSymbol,
+      activeTabId: this.tabId,
+      windowId: this.windowId,
+    });
   }
 
   init() {
@@ -304,6 +342,12 @@ export class MarketAnalyzer {
             if (info) {
               this.tabId = info.tabId || null;
               this.windowId = info.windowId || null;
+              configureFlightRecorder({
+                ctx: "content",
+                instanceId: this.instanceId,
+                windowId: this.windowId,
+                tabId: this.tabId,
+              });
               if (this.tabId) {
                 this.signalAuditor.setTabId(this.tabId);
                 this._claimCompute();
@@ -369,9 +413,13 @@ export class MarketAnalyzer {
     if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage || !this.tabId) return;
 
     chrome.runtime.sendMessage({ type: "CLAIM_COMPUTE", tabId: this.tabId }, (response) => {
+      rec("CLAIM_RESULT", {
+        granted: Boolean(response?.granted),
+        holder: response?.frameId ?? null,
+      });
       if (chrome.runtime?.lastError || !response || response.granted === false) {
         logger.warn("SISTEMA", `Instância de cálculo recusada para a aba ${this.tabId} (DENIED). Outro frame ativo.`);
-        this.destroy();
+        this.destroy("CLAIM_DENIED");
         return;
       }
 
@@ -381,14 +429,15 @@ export class MarketAnalyzer {
         chrome.runtime.sendMessage({ type: "COMPUTE_HEARTBEAT", tabId: this.tabId }, (hbRes) => {
           if (hbRes && hbRes.ok === false) {
             logger.warn("SISTEMA", "Heartbeat recusado. Perdida posse de cálculo.");
-            this.destroy();
+            this.destroy("HEARTBEAT_LOST");
           }
         });
       }, 2000);
     });
   }
 
-  destroy() {
+  destroy(reason = "NORMAL") {
+    rec("ANALYZER_DESTROY", { reason });
     this._isDestroyed = true;
     if (this._unsubBridge) {
       try { this._unsubBridge(); } catch (_) {}
@@ -473,6 +522,8 @@ export class MarketAnalyzer {
       currentDataOk = isReady && report.state === MarketState.READY;
     }
 
+    const prevPhase = this.currentLifecycleSnapshot?.trade?.phase || this.currentLifecycleSnapshot?.current?.phase || "SCANNING";
+
     const decideFn = decide ?? (() => {
       const now = Date.now();
       if (now - this.lastDecideAt < 300 && this.lastCachedDecision) {
@@ -493,6 +544,17 @@ export class MarketAnalyzer {
       const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
       this._recordEvalDuration(dur);
 
+      const targetTs = Math.floor(currentNowSec / 60) * 60 + 60;
+      rec("DECIDE_CALL", {
+        par: pair,
+        targetTs,
+        hashCandles: hashCandles(closedCandles),
+        action: decision?.action,
+        prob: decision?.probability,
+        subStrategy: decision?.subStrategy || decision?.strategyName,
+        candlesCount: closedCandles.length,
+      });
+
       this.lastDecideAt = now;
       this.lastCachedDecision = decision;
       this.quantReport = decision;
@@ -505,6 +567,19 @@ export class MarketAnalyzer {
       nowSec: currentNowSec,
       dataOk: currentDataOk,
       decide: decideFn,
+    });
+
+    const nextPhase = snapshot?.trade?.phase || snapshot?.current?.phase || "SCANNING";
+    const secInCandle = Math.floor(currentNowSec % 60);
+    rec("LIFECYCLE_STEP", {
+      par: pair,
+      targetTs: snapshot?.targetTs || snapshot?.current?.targetTs || snapshot?.trade?.targetTs || null,
+      secondInCandle: secInCandle,
+      phaseBefore: prevPhase,
+      phaseAfter: nextPhase,
+      direction: snapshot?.current?.direction || snapshot?.trade?.direction || null,
+      dataOk: currentDataOk,
+      remaining: 60 - secInCandle,
     });
 
     this.currentLifecycleSnapshot = snapshot;
@@ -638,6 +713,18 @@ export class MarketAnalyzer {
       // Guarda os candles no store (por símbolo para aquecer)
       const result = this.store.ingest(candle);
 
+      rec("CANDLE_INGEST", {
+        par: candleSym,
+        tf: activeTf,
+        ts: candle.timestamp,
+        closed: candle.closed,
+        storeStatus: result.status,
+        o: candle.open,
+        h: candle.high,
+        l: candle.low,
+        c: candle.close,
+      });
+
       // Se activeChannel.get() for null, NÃO rode lifecycle nem mude currentSymbol
       if (!activePair) {
         continue;
@@ -674,6 +761,8 @@ export class MarketAnalyzer {
       this.lastPrice = priceStr;
 
       if (result.status === "NEW_CANDLE") {
+        rec("CANDLE_OPEN", { symbol: activePair, ts: candle.timestamp });
+
         if (activeTf === 60) {
           marketClock.observeCandleOpen(candle.timestamp, candle.receivedAt);
           this.lifecycle.onCandleOpen(activePair, activeTf, candle.timestamp, candle.open);
@@ -684,6 +773,7 @@ export class MarketAnalyzer {
         );
 
         if (result.closedCandle) {
+          rec("CANDLE_CLOSE", { symbol: activePair, ts: result.closedCandle.timestamp });
           this.lifecycle.onCandleClose(activePair, activeTf, result.closedCandle);
           const closedSeries = this.store.getCandles(activePair, activeTf, 150);
           this.registry.get(activePair).observeClosedCandle(closedSeries);
@@ -973,6 +1063,33 @@ export class MarketAnalyzer {
     }
     this._lastStateSaveTime = now;
     this._latestStateToSave = null;
+
+    this._writeSeq = (this._writeSeq || 0) + 1;
+    payload.writeSeq = this._writeSeq;
+    const payloadSize = typeof JSON !== "undefined" ? JSON.stringify(payload).length : 0;
+    rec("STATE_WRITE", {
+      chave: `ifx:tab:${this.tabId}:state`,
+      writeSeq: this._writeSeq,
+      resumo: {
+        current: payload?.lifecycle?.current ? {
+          phase: payload.lifecycle.current.phase,
+          direction: payload.lifecycle.current.direction,
+          targetTs: payload.lifecycle.current.targetTs,
+        } : null,
+        trade: payload?.lifecycle?.trade ? {
+          phase: payload.lifecycle.trade.phase,
+          direction: payload.lifecycle.trade.direction,
+          targetTs: payload.lifecycle.trade.targetTs,
+        } : null,
+        lastResult: payload?.signalsHistory?.[0] ? {
+          id: payload.signalsHistory[0].id,
+          direction: payload.signalsHistory[0].action || payload.signalsHistory[0].direction,
+          result: payload.signalsHistory[0].result,
+          targetTs: payload.signalsHistory[0].targetTimestamp,
+        } : null,
+      },
+      tamanhoPayload: payloadSize,
+    });
 
     if (chrome.runtime?.sendMessage) {
       try {

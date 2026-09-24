@@ -102,6 +102,24 @@ export function initBridgeListener(options = {}) {
   window.__oracleBridgeListenerActive = true;
 
   const messageHandler = (event) => {
+    // Repassa eventos de gravação de voo vindos do MAIN world diretamente para o Service Worker
+    if (event.data?.type === "ORACLE_FLIGHT_REC" && event.data.record) {
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        try {
+          chrome.runtime.sendMessage(
+            {
+              type: "REC",
+              record: event.data.record,
+            },
+            () => {
+              if (chrome.runtime?.lastError) {}
+            }
+          );
+        } catch (_) {}
+      }
+      return;
+    }
+
     // Filtro rápido de tipo
     if (
       !event.data ||

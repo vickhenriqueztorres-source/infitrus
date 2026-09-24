@@ -132,10 +132,16 @@
       </div>
     </header>
 
-    <div class="multi-window-bar" aria-label="Organizar ventanas">
-      <span class="multi-label">VENTANAS:</span>
-      <button id="btn-tile-2" class="multi-btn" type="button" title="Organizar 2 gráficos lado a lado">2 Ventanas</button>
-      <button id="btn-tile-3" class="multi-btn" type="button" title="Organizar 3 gráficos lado a lado">3 Ventanas</button>
+    <div class="multi-window-bar" aria-label="Gravador de voo e janelas" style="flex-wrap:wrap;gap:4px">
+      <div style="display:flex;align-items:center;gap:4px">
+        <button id="btn-mark-occurrence" class="multi-btn" type="button" title="Marcar momento de uma anomalia ou bug">📍 Marcar ocorrência</button>
+        <button id="btn-export-flight" class="multi-btn" type="button" title="Exportar bundle de diagnóstico JSON">📥 Exportar diagnóstico</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;margin-left:auto">
+        <span class="multi-label">MOSAICO:</span>
+        <button id="btn-tile-2" class="multi-btn" type="button" title="Organizar 2 gráficos lado a lado">2V</button>
+        <button id="btn-tile-3" class="multi-btn" type="button" title="Organizar 3 gráficos lado a lado">3V</button>
+      </div>
     </div>
 
     <!-- Navegação de Abas Principais -->

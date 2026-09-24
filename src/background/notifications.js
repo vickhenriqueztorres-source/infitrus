@@ -8,6 +8,8 @@
  * - Deduplicar notificações por ${signal.id}:${fase} via chrome.storage.session.
  */
 
+import { rec } from "../diagnostics/flight-recorder.js";
+
 /**
  * Trata mudança de estado de uma aba específica e atualiza badge e notificações.
  *
@@ -31,10 +33,12 @@ export async function handleTabStateChange(tabId, newState, oldState = null) {
         if (globalThis.chrome.action.setBadgeBackgroundColor) {
           globalThis.chrome.action.setBadgeBackgroundColor({ tabId, color });
         }
+        rec("BADGE_SET", { tabId, text, color });
       } catch (_) {}
     } else {
       try {
         globalThis.chrome.action.setBadgeText({ tabId, text: "" });
+        rec("BADGE_SET", { tabId, text: "" });
       } catch (_) {}
     }
   }
@@ -69,13 +73,16 @@ export async function handleTabStateChange(tabId, newState, oldState = null) {
 
   if (globalThis.chrome?.notifications?.create) {
     try {
-      await globalThis.chrome.notifications.create(`ifx-${activeSignal.id}-${activeSignal.phase}`, {
+      const notifId = `ifx-${activeSignal.id}-${activeSignal.phase}`;
+      const notifOpts = {
         type: "basic",
         iconUrl: globalThis.chrome.runtime?.getURL?.("assets/icons/icon-128.png") || "",
         title,
         message,
         priority: 2,
-      });
+      };
+      rec("NOTIFY", { id: notifId, options: notifOpts });
+      await globalThis.chrome.notifications.create(notifId, notifOpts);
     } catch (_) {}
   }
 }

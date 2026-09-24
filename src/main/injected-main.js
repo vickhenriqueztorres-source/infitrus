@@ -58,6 +58,31 @@
   const sessionId = "sess_" + Math.random().toString(36).substring(2, 12) + "_" + Date.now();
   window.__oracleSessionId = sessionId;
 
+  function recMain(type, payload) {
+    try {
+      const tWall = Date.now();
+      const tPerf = typeof performance !== "undefined" && performance.now ? performance.now() : 0;
+      const record = {
+        tWall,
+        tPerf,
+        ctx: "main",
+        tabId: null,
+        frameId: null,
+        windowId: null,
+        instanceId: sessionId,
+        type,
+        payload,
+      };
+      window.postMessage(
+        {
+          type: "ORACLE_FLIGHT_REC",
+          record,
+        },
+        "*"
+      );
+    } catch (_) {}
+  }
+
   function dispatchToBridge(sourceType, eventData, receivedAt = Date.now()) {
     if (!eventData || !eventData.payload) return;
     try {
@@ -102,7 +127,9 @@
     const originalSend = OriginalWebSocket.prototype.send;
     OriginalWebSocket.prototype.send = function (data) {
       try {
-        let strData = typeof data === "string" ? data : "";
+        let strData = typeof data === "string" ? data : (data instanceof ArrayBuffer || ArrayBuffer.isView(data) ? "[binary]" : String(data || ""));
+        recMain("WS_SEND", { text: strData.substring(0, 300) });
+
         if (strData) {
           const firstBracket = strData.search(/[{\[]/);
           if (firstBracket > 0) {
@@ -181,6 +208,30 @@
           const parsed = JSON.parse(str);
           if (!parsed || typeof parsed !== "object") return;
 
+          // Resumo de WS_FRAME para o Flight Recorder (registra TODOS os frames de candle que chegam, sem filtrar por par)
+          const fPair = parsed.pair || parsed.symbol || parsed.asset || parsed.ticker || (parsed.bar && (parsed.bar.pair || parsed.bar.symbol)) || (Array.isArray(parsed) && parsed[0]?.pair) || null;
+          const fChannel = parsed.channel || parsed.name || parsed.event || parsed.type || null;
+          const fBar = parsed.bar || parsed.candle || (Array.isArray(parsed.bars) ? parsed.bars[0] : (Array.isArray(parsed) ? parsed[0] : parsed));
+          const fTs = fBar?.timestamp || fBar?.time || fBar?.t || parsed.time || parsed.timestamp || parsed.t || receivedAt;
+          const fO = fBar?.open ?? fBar?.o ?? parsed.open ?? parsed.o ?? null;
+          const fH = fBar?.high ?? fBar?.h ?? parsed.high ?? parsed.h ?? null;
+          const fL = fBar?.low ?? fBar?.l ?? parsed.low ?? parsed.l ?? null;
+          const fC = fBar?.close ?? fBar?.c ?? parsed.price ?? parsed.p ?? parsed.rate ?? null;
+          const fTf = fBar?.tf || fBar?.resolution || parsed.tf || parsed.resolution || null;
+          const fClosed = fBar?.closed !== undefined ? fBar.closed : (parsed.closed !== undefined ? parsed.closed : null);
+
+          recMain("WS_FRAME", {
+            channel: fChannel,
+            pair: fPair,
+            tf: fTf,
+            ts: fTs,
+            o: fO,
+            h: fH,
+            l: fL,
+            c: fC,
+            closed: fClosed,
+          });
+
           let isRelevant = false;
           if (parsed.pair || parsed.symbol || parsed.asset || parsed.ticker) {
             isRelevant = true;
@@ -217,6 +268,7 @@
       // Filtra apenas WebSockets de mercado para evitar oscilações por sockets secundários de terceiros
       OriginalWebSocket.prototype.addEventListener.call(ws, "open", () => {
         if (!isMarketWs) return;
+        recMain("WS_OPEN", { url: sanitizedUrl });
         try {
           window.postMessage(
             {
@@ -233,6 +285,7 @@
 
       OriginalWebSocket.prototype.addEventListener.call(ws, "close", () => {
         if (!isMarketWs) return;
+        recMain("WS_CLOSE", { url: sanitizedUrl });
         try {
           window.postMessage(
             {

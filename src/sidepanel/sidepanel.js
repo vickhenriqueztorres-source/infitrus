@@ -7,6 +7,13 @@ import { translateLogMessage, translateLogTag } from "../ui/components/layout.js
 import { selectTabView } from "../ui/tab-view-selector.js";
 import { soundsForTransition } from "../ui/sound-transitions.js";
 import { formatLifecycleCard } from "../ui/lifecycle-card.js";
+import { rec, configureFlightRecorder, generateUUID } from "../diagnostics/flight-recorder.js";
+
+const panelInstanceId = generateUUID();
+configureFlightRecorder({
+  ctx: "sidepanel",
+  instanceId: panelInstanceId,
+});
 
 const localMarketClock = new MarketClock();
 const NOTIFICATIONS_KEY = "ifx_notifications_v1";
@@ -19,6 +26,7 @@ let isBoundTabB2 = false;
 let activeMainTab = "signal"; // 'signal' | 'quant' | 'logs'
 let activeSignalData = null;
 let lastLifecycle = null;
+let lastRenderedSeq = null;
 const playedSoundSet = new Set();
 
 function sendToBoundTab(message) {
@@ -74,6 +82,8 @@ function switchMainTab(tabName) {
 function playSoundList(sounds = []) {
   if (!sounds || !sounds.length) return;
   for (const s of sounds) {
+    const isDedup = playedSoundSet.has(s);
+    rec("SOUND", { soundName: s, deduplicated: isDedup });
     if (s === "call") audioAlertManager.playCallAlert();
     else if (s === "put") audioAlertManager.playPutAlert();
     else if (s === "pip") audioAlertManager.playCountdownPip(1);
@@ -577,6 +587,80 @@ function renderState(state = null, signals = [], logs = []) {
         wave.setState(vm.wave);
       }
     }
+
+    // Atualiza seq renderizado para monitorar se chegam escritas fora de ordem
+    if (displayData?.writeSeq !== undefined) {
+      lastRenderedSeq = displayData.writeSeq;
+    }
+
+    // Registra RENDER com a lista de TODOS os cards visíveis no Flight Recorder
+    const cards = [];
+    const mainTitleEl = document.getElementById("signal-title");
+    const mainBadgeEl = document.getElementById("signal-direction-badge");
+    const mainTimerEl = document.getElementById("signal-timer-badge");
+    const mainCardEl = document.getElementById("signal-card");
+
+    if (mainCardEl) {
+      cards.push({
+        origem: "storage.state.lifecycle.current (Card Principal)",
+        par: displayData?.symbol || displayData?.pair || "---",
+        targetTs: displayData?.lifecycle?.current?.targetTs || null,
+        phase: displayData?.lifecycle?.current?.phase || "SCANNING",
+        direcao: displayData?.action || displayData?.lifecycle?.current?.direction || "WAIT",
+        textoTitulo: mainTitleEl?.textContent || "",
+        badge: mainBadgeEl?.textContent || "",
+        timer: mainTimerEl?.textContent || "",
+      });
+    }
+
+    if (displayData?.lifecycle?.trade) {
+      cards.push({
+        origem: "storage.state.lifecycle.trade (Card Trade)",
+        par: displayData.lifecycle.trade.pair || displayData?.symbol || "---",
+        targetTs: displayData.lifecycle.trade.targetTs || null,
+        phase: displayData.lifecycle.trade.phase,
+        direcao: displayData.lifecycle.trade.direction,
+        textoTitulo: `Operação em andamento (${displayData.lifecycle.trade.direction})`,
+        badge: displayData.lifecycle.trade.direction,
+        timer: "--",
+      });
+    }
+
+    if (signals && signals.length > 0 && signals[0]) {
+      const s0 = signals[0];
+      cards.push({
+        origem: "storage.signals[0] (Último Resultado)",
+        par: s0.symbol || s0.pair || "---",
+        targetTs: s0.targetTimestamp || null,
+        phase: s0.result === "CANCELLED" ? "CANCELLED" : "SETTLED",
+        direcao: s0.action || s0.direction || "---",
+        textoTitulo: `Resultado ${s0.result}: ${s0.entryPrice || "--"} -> ${s0.closePrice || "--"}`,
+        badge: s0.result,
+        timer: "--",
+      });
+    }
+
+    const rawSignalsList = Array.isArray(signals) ? signals : [];
+    rawSignalsList.slice(0, 10).forEach((sig, idx) => {
+      cards.push({
+        origem: `storage.signals[${idx}] (Histórico Item ${idx + 1})`,
+        par: sig?.symbol || sig?.pair || "---",
+        targetTs: sig?.targetTimestamp || null,
+        phase: sig?.result === "CANCELLED" ? "CANCELLED" : (sig?.status || "SETTLED"),
+        direcao: sig?.action || sig?.direction || "---",
+        textoTitulo: `${sig?.result || "PENDING"} ${sig?.action || sig?.direction || ""}`,
+        badge: sig?.result || "PENDING",
+        timer: "--",
+      });
+    });
+
+    rec("RENDER", {
+      cardsCount: cards.length,
+      cards,
+      symbol: displayData?.symbol || null,
+      tabId: boundTabId,
+      windowId: boundWindowId,
+    });
   } catch (err) {
     console.error("[Inflitrus Sidepanel] Error rendering state:", err);
   }
@@ -594,9 +678,26 @@ async function updateBoundContext() {
     if (typeof chrome !== "undefined" && chrome.tabs?.query && boundWindowId != null) {
       const tabs = await chrome.tabs.query({ active: true, windowId: boundWindowId });
       const activeTab = tabs?.[0];
+      const prevTabId = boundTabId;
       boundTabId = activeTab?.id || null;
       const url = activeTab?.url || "";
       isBoundTabB2 = url.includes("b2trading.io");
+
+      configureFlightRecorder({
+        ctx: "sidepanel",
+        instanceId: panelInstanceId,
+        windowId: boundWindowId,
+        tabId: boundTabId,
+      });
+
+      if (boundTabId !== prevTabId) {
+        rec("TAB_SELECTED", {
+          tabId: boundTabId,
+          windowId: boundWindowId,
+          porQue: "query.active (leitura inicial da aba ativa na janela)",
+          source: "query.active",
+        });
+      }
     }
     await updateWindowLabel();
   } catch (_) {}
@@ -649,12 +750,25 @@ async function initSidepanel() {
 
   // 2. Identifica janela e aba ligadas
   await updateBoundContext();
+  rec("PANEL_NEW", { windowId: boundWindowId, boundTabId });
 
   if (typeof chrome !== "undefined" && chrome.tabs) {
     if (chrome.tabs.onActivated) {
       chrome.tabs.onActivated.addListener(async (activeInfo) => {
         if (activeInfo.windowId === boundWindowId) {
           boundTabId = activeInfo.tabId;
+          configureFlightRecorder({
+            ctx: "sidepanel",
+            instanceId: panelInstanceId,
+            windowId: boundWindowId,
+            tabId: boundTabId,
+          });
+          rec("TAB_SELECTED", {
+            tabId: boundTabId,
+            windowId: boundWindowId,
+            porQue: "tabs.onActivated (usuário alternou aba ativa)",
+            source: "tabs.onActivated",
+          });
           await refreshWindowState();
         }
       });
@@ -733,9 +847,63 @@ async function initSidepanel() {
     chrome.runtime.sendMessage({ type: "ORACLE_ARRANGE_MULTI_WINDOWS", count: 3 });
   });
 
+  // Botões de Diagnóstico / Gravador de Voo
+  document.getElementById("btn-mark-occurrence")?.addEventListener("click", () => {
+    const note = window.prompt("Descreva o que acabou de acontecer (ex: 'trocou de CALL pra PUT', '4 sinais ao mesmo tempo'):", "");
+    if (note !== null) {
+      rec("USER_MARK", { note: note.trim() || "Sem descrição", at: new Date().toISOString() });
+      const btn = document.getElementById("btn-mark-occurrence");
+      if (btn) {
+        const oldText = btn.textContent;
+        btn.textContent = "✓ Marcado!";
+        setTimeout(() => { btn.textContent = oldText; }, 2000);
+      }
+    }
+  });
+
+  document.getElementById("btn-export-flight")?.addEventListener("click", () => {
+    const btn = document.getElementById("btn-export-flight");
+    if (btn) btn.textContent = "⏳...";
+    chrome.runtime.sendMessage({ type: "REC_EXPORT" }, (res) => {
+      if (btn) btn.textContent = "📥 Exportar";
+      if (chrome.runtime?.lastError || !res || !res.ok) {
+        alert("Erro ao exportar diagnóstico do voo: " + (chrome.runtime?.lastError?.message || res?.error || "Desconhecido"));
+        return;
+      }
+      const bundleJson = JSON.stringify(res.bundle, null, 2);
+      const blob = new Blob([bundleJson], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      a.href = url;
+      a.download = `ifx-flight-${timestamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 2000);
+    });
+  });
+
   // 6. Observador de mudanças no Storage estritamente isolado para a aba vinculada
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || !boundTabId) return;
+
+    for (const [key, change] of Object.entries(changes)) {
+      if (key.startsWith(`ifx:tab:${boundTabId}:`)) {
+        const seqRecebido = change.newValue?.writeSeq ?? null;
+        const oldPhase = change.oldValue?.lifecycle?.trade?.phase || change.oldValue?.lifecycle?.current?.phase || null;
+        const newPhase = change.newValue?.lifecycle?.trade?.phase || change.newValue?.lifecycle?.current?.phase || null;
+        rec("STORAGE_CHANGE", {
+          chave: key,
+          seqRecebido,
+          seqAnteriorRenderizado: lastRenderedSeq,
+          oldValuePhase: oldPhase,
+          newValuePhase: newPhase,
+        });
+      }
+    }
 
     const tabPrefix = `ifx:tab:${boundTabId}:`;
     const relevant = Object.keys(changes).some((k) => k.startsWith(tabPrefix) || k === winSoundKey);

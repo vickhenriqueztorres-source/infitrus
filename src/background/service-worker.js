@@ -1,4 +1,15 @@
 import { handleTabStateChange } from "./notifications.js";
+import {
+  rec,
+  configureFlightRecorder,
+  swIngestRecord,
+  swRestoreState,
+  swBuildExportBundle,
+} from "../diagnostics/flight-recorder.js";
+
+configureFlightRecorder({ ctx: "sw" });
+swRestoreState().catch(() => {});
+rec("SW_BOOT", { motivo: "sw_evaluation_or_wake_up", time: Date.now() });
 
 function configureDockedPanel() {
   if (typeof chrome === "undefined" || !chrome.sidePanel?.setPanelBehavior) return;
@@ -8,12 +19,19 @@ function configureDockedPanel() {
 configureDockedPanel();
 
 if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
-  chrome.runtime.onInstalled.addListener(() => {
+  chrome.runtime.onInstalled.addListener((details) => {
+    rec("SW_BOOT", { motivo: `onInstalled_${details?.reason || "installed"}`, time: Date.now() });
     console.log("[Inflitrus] Extensión instalada.");
     configureDockedPanel();
     try {
       chrome.storage.local.clear().catch(() => {});
     } catch (_) {}
+  });
+}
+
+if (typeof chrome !== "undefined" && chrome.runtime?.onStartup) {
+  chrome.runtime.onStartup.addListener(() => {
+    rec("SW_BOOT", { motivo: "onStartup_browser_start", time: Date.now() });
   });
 }
 
@@ -85,6 +103,37 @@ function removeSessionStorage(keys, callback = () => {}) {
 }
 
 export function handleServiceWorkerMessage(message, sender, sendResponse) {
+  if (message?.type === "REC" && message.record) {
+    swIngestRecord(message.record, sender);
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (message?.type === "REC_EXPORT") {
+    swBuildExportBundle().then((bundle) => {
+      sendResponse({ ok: true, bundle });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: err?.message || String(err) });
+    });
+    return true;
+  }
+
+  if (message?.type === "USER_MARK") {
+    swIngestRecord({
+      type: "USER_MARK",
+      payload: message.payload || {},
+    }, sender);
+    sendResponse({ ok: true });
+    return;
+  }
+
+  rec("SW_MSG_RECV", {
+    type: message?.type || "unknown",
+    senderTabId: sender?.tab?.id || null,
+    senderFrameId: sender?.frameId ?? null,
+    senderUrl: sender?.url || sender?.tab?.url || null,
+  });
+
   if (message?.type === "ORACLE_GET_TAB_INFO") {
     sendResponse({
       tabId: sender?.tab?.id || null,
@@ -98,6 +147,7 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
     const tabId = sender?.tab?.id || message.tabId;
     const frameId = sender?.frameId !== undefined ? sender.frameId : (message.frameId ?? 0);
     if (!tabId) {
+      rec("CLAIM_DENIED", { tabId: null, frameId, reason: "NO_TAB_ID" });
       sendResponse({ granted: false, reason: "NO_TAB_ID" });
       return;
     }
@@ -108,9 +158,11 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
       const existing = res?.[key];
       // Se já houver dono vivo (heartbeat < 5s) e frameId diferente: DENIED
       if (existing && existing.frameId !== frameId && (now - existing.lastHeartbeat < 5000)) {
+        rec("CLAIM_DENIED", { tabId, frameId, existingOwner: existing.frameId });
         sendResponse({ granted: false, reason: "DENIED" });
         return;
       }
+      rec("CLAIM_GRANTED", { tabId, frameId });
       setSessionStorage(
         {
           [key]: { frameId, lastHeartbeat: now },
@@ -189,6 +241,13 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
         sendResponse({ saved: false, reason: "DENIED_NOT_OWNER" });
         return;
       }
+
+      rec("SW_STORAGE_WRITE", {
+        chave: `ifx:tab:${tabId}:state`,
+        seq: message.state?.writeSeq || null,
+        tabId,
+        currentPhase: message.state?.lifecycle?.current?.phase || null,
+      });
 
       if (chrome.storage?.local?.set) {
         chrome.storage.local.set(
