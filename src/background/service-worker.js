@@ -7,13 +7,15 @@ function configureDockedPanel() {
 
 configureDockedPanel();
 
-chrome.runtime.onInstalled.addListener(() => {
-  console.log("[Inflitrus] Extensión instalada.");
-  configureDockedPanel();
-  try {
-    chrome.storage.local.clear().catch(() => {});
-  } catch (_) {}
-});
+if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
+  chrome.runtime.onInstalled.addListener(() => {
+    console.log("[Inflitrus] Extensión instalada.");
+    configureDockedPanel();
+    try {
+      chrome.storage.local.clear().catch(() => {});
+    } catch (_) {}
+  });
+}
 
 // Escuta mudanças de estado por aba para atualizar badge e emitir notificações (I-06, I-07)
 if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
@@ -34,14 +36,174 @@ if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
   });
 }
 
-// Responde a pedidos de identificação de aba/janela e gerenciamento de multitelas
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+function getSessionStorage(keys, callback) {
+  const store = chrome.storage?.session || chrome.storage?.local;
+  if (!store?.get) {
+    callback({});
+    return;
+  }
+  try {
+    const res = store.get(keys, (data) => callback(data || {}));
+    if (res instanceof Promise) {
+      res.then((data) => callback(data || {})).catch(() => callback({}));
+    }
+  } catch (_) {
+    callback({});
+  }
+}
+
+function setSessionStorage(obj, callback = () => {}) {
+  const store = chrome.storage?.session || chrome.storage?.local;
+  if (!store?.set) {
+    callback();
+    return;
+  }
+  try {
+    const res = store.set(obj, callback);
+    if (res instanceof Promise) {
+      res.then(() => callback()).catch(() => callback());
+    }
+  } catch (_) {
+    callback();
+  }
+}
+
+function removeSessionStorage(keys, callback = () => {}) {
+  const store = chrome.storage?.session || chrome.storage?.local;
+  if (!store?.remove) {
+    callback();
+    return;
+  }
+  try {
+    const res = store.remove(keys, callback);
+    if (res instanceof Promise) {
+      res.then(() => callback()).catch(() => callback());
+    }
+  } catch (_) {
+    callback();
+  }
+}
+
+export function handleServiceWorkerMessage(message, sender, sendResponse) {
   if (message?.type === "ORACLE_GET_TAB_INFO") {
     sendResponse({
-      tabId: sender.tab?.id || null,
-      windowId: sender.tab?.windowId || null,
+      tabId: sender?.tab?.id || null,
+      windowId: sender?.tab?.windowId || null,
     });
     return;
+  }
+
+  // Trava de instância única por aba: CLAIM_COMPUTE
+  if (message?.type === "CLAIM_COMPUTE") {
+    const tabId = sender?.tab?.id || message.tabId;
+    const frameId = sender?.frameId !== undefined ? sender.frameId : (message.frameId ?? 0);
+    if (!tabId) {
+      sendResponse({ granted: false, reason: "NO_TAB_ID" });
+      return;
+    }
+    const key = `ifx:compute-owner:${tabId}`;
+    const now = Date.now();
+
+    getSessionStorage([key], (res) => {
+      const existing = res?.[key];
+      // Se já houver dono vivo (heartbeat < 5s) e frameId diferente: DENIED
+      if (existing && existing.frameId !== frameId && (now - existing.lastHeartbeat < 5000)) {
+        sendResponse({ granted: false, reason: "DENIED" });
+        return;
+      }
+      setSessionStorage(
+        {
+          [key]: { frameId, lastHeartbeat: now },
+        },
+        () => {
+          sendResponse({ granted: true, frameId, tabId });
+        }
+      );
+    });
+    return true;
+  }
+
+  if (message?.type === "COMPUTE_HEARTBEAT") {
+    const tabId = sender?.tab?.id || message.tabId;
+    const frameId = sender?.frameId !== undefined ? sender.frameId : (message.frameId ?? 0);
+    if (!tabId) {
+      sendResponse({ ok: false, reason: "NO_TAB_ID" });
+      return;
+    }
+    const key = `ifx:compute-owner:${tabId}`;
+    const now = Date.now();
+
+    getSessionStorage([key], (res) => {
+      const existing = res?.[key];
+      if (existing && existing.frameId === frameId) {
+        setSessionStorage(
+          {
+            [key]: { frameId, lastHeartbeat: now },
+          },
+          () => {
+            sendResponse({ ok: true });
+          }
+        );
+      } else {
+        sendResponse({ ok: false, reason: "NOT_OWNER" });
+      }
+    });
+    return true;
+  }
+
+  if (message?.type === "RELEASE_COMPUTE") {
+    const tabId = sender?.tab?.id || message.tabId;
+    const frameId = sender?.frameId !== undefined ? sender.frameId : (message.frameId ?? 0);
+    if (!tabId) {
+      sendResponse({ released: false });
+      return;
+    }
+    const key = `ifx:compute-owner:${tabId}`;
+    getSessionStorage([key], (res) => {
+      const existing = res?.[key];
+      if (existing && existing.frameId === frameId) {
+        removeSessionStorage([key], () => {
+          sendResponse({ released: true });
+        });
+      } else {
+        sendResponse({ released: false });
+      }
+    });
+    return true;
+  }
+
+  // Toda escrita em ifx:tab:<tabId>:state passa pelo SW e é rejeitada se sender.frameId !== owner
+  if (message?.type === "ORACLE_SAVE_TAB_STATE") {
+    const tabId = sender?.tab?.id || message.tabId;
+    const frameId = sender?.frameId !== undefined ? sender.frameId : (message.frameId ?? 0);
+    if (!tabId) {
+      sendResponse({ saved: false, reason: "NO_TAB_ID" });
+      return;
+    }
+    const key = `ifx:compute-owner:${tabId}`;
+    const now = Date.now();
+
+    getSessionStorage([key], (res) => {
+      const existing = res?.[key];
+      if (existing && existing.frameId !== frameId && (now - existing.lastHeartbeat < 5000)) {
+        sendResponse({ saved: false, reason: "DENIED_NOT_OWNER" });
+        return;
+      }
+
+      if (chrome.storage?.local?.set) {
+        chrome.storage.local.set(
+          {
+            [`ifx:tab:${tabId}:state`]: message.state,
+          },
+          () => {
+            sendResponse({ saved: true });
+          }
+        );
+      } else {
+        sendResponse({ saved: false, reason: "NO_LOCAL_STORAGE" });
+      }
+    });
+    return true;
   }
 
   if (message?.type === "ORACLE_ARRANGE_MULTI_WINDOWS") {
@@ -52,7 +214,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
-});
+}
+
+if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener(handleServiceWorkerMessage);
+}
 
 // Atualiza windowId quando a aba é movida para outra janela
 if (typeof chrome !== "undefined" && chrome.tabs?.onAttached) {
@@ -75,6 +241,7 @@ if (typeof chrome !== "undefined" && chrome.tabs?.onRemoved) {
         `ifx:tab:${tabId}:signals`,
         `ifx:tab:${tabId}:logs`,
       ]);
+      removeSessionStorage([`ifx:compute-owner:${tabId}`]);
     } catch (_) {}
   });
 }

@@ -123,15 +123,20 @@ export function detectActiveSymbolFromDOM() {
 export class MarketAnalyzer {
   constructor() {
     this.timeframeSeconds = 60; // Padrão M1
-    const initialSym = detectActiveSymbolFromDOM() || "EURUSD";
-    this.currentSymbol = initialSym;
-    this.activeSymbols = new Set([initialSym]);
+    this.currentSymbol = null;
+    this.activeSymbols = new Set();
     this.lastPrices = new Map();
     this._lastLoggedPrices = new Map();
     this.store = new CandleStore({ maxCandlesPerSeries: 500 });
     this.activeChannel = new ActiveChannel();
     this._lastTickReceivedAt = 0;
+    this._firstTickAt = 0;
+    this._warnedNoChannel = false;
     this._disconnectTimer = null;
+    this._unsubBridge = null;
+    this._unsubChannel = null;
+    this._unsubLifecycle = null;
+    this._heartbeatInterval = null;
 
     if (typeof window !== "undefined") {
       candleTimer.start();
@@ -147,10 +152,10 @@ export class MarketAnalyzer {
     this.lastDecideAt = 0;
     this.lastCachedDecision = null;
     this.currentLifecycleSnapshot = null;
-    this.panel = null; // Painel oculto removido do fluxo de execução padrão (I-08)
+    this.panel = null;
 
-    // Ao trocar de ativo: cancela par antigo, limpa do activeSymbols e atualiza contexto (I-03, I-10)
-    this.activeChannel.onChange((next, prev) => {
+    // UMA fonte de verdade para o par ativo: SOMENTE activeChannel (subscribe/unsubscribe capturado do WebSocket)
+    this._unsubChannel = this.activeChannel.onChange((next, prev) => {
       if (prev && prev.pair && (!next || next.pair !== prev.pair)) {
         this.lifecycle.cancelPair(prev.pair, "ASSET_CHANGED");
         this.activeSymbols.delete(prev.pair);
@@ -161,12 +166,15 @@ export class MarketAnalyzer {
         this.activeSymbols.clear();
         this.activeSymbols.add(next.pair);
         logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
+      } else {
+        this.currentSymbol = null;
       }
       this.updatePanelDisplay();
     });
 
     // Conexão dos Eventos do SignalLifecycle (Único ponto com efeitos colaterais de sinal)
-    this.lifecycle.onEvent((event, lc) => {
+    this._unsubLifecycle = this.lifecycle.onEvent((event, lc) => {
+      if (this._isDestroyed) return;
       if (event === Phase.PRE_SIGNAL) {
         this.signalAuditor.recordSignal({
           id: lc.id,
@@ -209,9 +217,10 @@ export class MarketAnalyzer {
         this.updatePanelDisplay({ immediate: true });
       }
     });
+
     this.quantReport = {
       action: "WAIT",
-      label: "AGUARDAR",
+      label: "Esperando canal del gráfico…",
       probability: 0.50,
       ev: 0,
       edge: 0,
@@ -221,14 +230,14 @@ export class MarketAnalyzer {
       confluence: null,
       isConfluence: false,
       isDivergent: false,
-      reasons: ["Inicializando portfólio quantitativo..."],
+      reasons: ["Esperando canal del gráfico…"],
     };
 
     this.currentSignal = {
       action: "WAIT",
-      label: "AGUARDAR",
+      label: "Esperando canal del gráfico…",
       indicators: {},
-      reasons: ["Inicializando observador quant"],
+      reasons: ["Esperando canal del gráfico…"],
     };
 
     this.socketStatus = "desconectado";
@@ -250,19 +259,6 @@ export class MarketAnalyzer {
     this.init();
   }
 
-  _switchSymbol(nextPair, tf = 60) {
-    if (!nextPair || nextPair === this.currentSymbol) return;
-    const prev = this.currentSymbol;
-    this.lifecycle.cancelPair(prev, "ASSET_CHANGED");
-    this.activeSymbols.delete(prev);
-    this.currentSymbol = nextPair;
-    this.timeframeSeconds = tf || 60;
-    this.activeSymbols.clear();
-    this.activeSymbols.add(nextPair);
-    logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
-    this.updatePanelDisplay({ immediate: true });
-  }
-
   init() {
     // 0. Identifica a aba e janela atuais via Background Service Worker (com retry defensivo)
     const fetchTabInfo = (retry = true) => {
@@ -280,6 +276,7 @@ export class MarketAnalyzer {
               this.windowId = info.windowId || null;
               if (this.tabId) {
                 this.signalAuditor.setTabId(this.tabId);
+                this._claimCompute();
               }
               logger.setContext({ tabId: this.tabId, symbol: this.currentSymbol });
               this.updatePanelDisplay({ immediate: true });
@@ -291,26 +288,20 @@ export class MarketAnalyzer {
     fetchTabInfo();
 
     // 1. Escuta eventos da Bridge (com canal)
-    initBridgeListener({
+    this._unsubBridge = initBridgeListener({
       onMarketEvent: (event) => this.handleMarketEvent(event),
       onSocketStatus: (info) => this.handleSocketStatus(info),
       onChannel: (ch) => this.activeChannel.onChannel(ch),
     });
 
-    // 2. Verificação periódica de Heartbeat / Stale feed a cada 2.5s, detecção no DOM e loop contínuo do SignalLifecycle
+    // 2. Verificação periódica de Heartbeat / Stale feed a cada 2.5s e loop contínuo do SignalLifecycle
     if (typeof window !== "undefined") {
       this._staleInterval = setInterval(() => {
         if (this._isDestroyed) return;
-        this.quality.checkStale(this.currentSymbol, this.timeframeSeconds);
-      }, 2500);
-
-      this._domCheckInterval = setInterval(() => {
-        if (this._isDestroyed) return;
-        const domSym = detectActiveSymbolFromDOM();
-        if (domSym && !this.activeChannel.get() && domSym !== this.currentSymbol) {
-          this._switchSymbol(domSym);
+        if (this.currentSymbol) {
+          this.quality.checkStale(this.currentSymbol, this.timeframeSeconds);
         }
-      }, 2000);
+      }, 2500);
 
       this._lifecycleInterval = setInterval(() => {
         if (this._isDestroyed) return;
@@ -326,6 +317,7 @@ export class MarketAnalyzer {
     // 3. Listener seguro para alteração de payout e vinculação de janela via Background/Side Panel (I-01, I-05)
     if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
       chrome.runtime.onMessage.addListener((msg, sender) => {
+        if (this._isDestroyed) return;
         if (sender && sender.id !== chrome.runtime.id) return;
         if (msg && msg.type === "ORACLE_TAB_ATTACHED" && msg.windowId) {
           this.windowId = msg.windowId;
@@ -339,24 +331,59 @@ export class MarketAnalyzer {
       });
     }
 
-    const isIframe = typeof window !== "undefined" && window.self !== window.top;
     const host = typeof window !== "undefined" ? window.location.hostname : "local";
-    logger.info(
-      "SISTEMA",
-      isIframe
-        ? `Analyzer ativo em iframe gráfico de cálculo (${host})`
-        : `Analyzer ativo em frame principal (fallback ${host})`
-    );
+    logger.info("SISTEMA", `Analyzer ativo em iframe gráfico de cálculo (${host})`);
+  }
+
+  _claimCompute() {
+    if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage || !this.tabId) return;
+
+    chrome.runtime.sendMessage({ type: "CLAIM_COMPUTE", tabId: this.tabId }, (response) => {
+      if (chrome.runtime?.lastError || !response || response.granted === false) {
+        logger.warn("SISTEMA", `Instância de cálculo recusada para a aba ${this.tabId} (DENIED). Outro frame ativo.`);
+        this.destroy();
+        return;
+      }
+
+      if (this._heartbeatInterval) clearInterval(this._heartbeatInterval);
+      this._heartbeatInterval = setInterval(() => {
+        if (this._isDestroyed) return;
+        chrome.runtime.sendMessage({ type: "COMPUTE_HEARTBEAT", tabId: this.tabId }, (hbRes) => {
+          if (hbRes && hbRes.ok === false) {
+            logger.warn("SISTEMA", "Heartbeat recusado. Perdida posse de cálculo.");
+            this.destroy();
+          }
+        });
+      }, 2000);
+    });
   }
 
   destroy() {
     this._isDestroyed = true;
+    if (this._unsubBridge) {
+      try { this._unsubBridge(); } catch (_) {}
+      this._unsubBridge = null;
+    }
+    if (this._unsubChannel) {
+      try { this._unsubChannel(); } catch (_) {}
+      this._unsubChannel = null;
+    }
+    if (this._unsubLifecycle) {
+      try { this._unsubLifecycle(); } catch (_) {}
+      this._unsubLifecycle = null;
+    }
     if (this._staleInterval) clearInterval(this._staleInterval);
-    if (this._domCheckInterval) clearInterval(this._domCheckInterval);
     if (this._lifecycleInterval) clearInterval(this._lifecycleInterval);
     if (this._perfInterval) clearInterval(this._perfInterval);
+    if (this._heartbeatInterval) clearInterval(this._heartbeatInterval);
     if (this._pendingStateSaveTimeout) clearTimeout(this._pendingStateSaveTimeout);
     if (this._disconnectTimer) clearTimeout(this._disconnectTimer);
+
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage && this.tabId) {
+      try {
+        chrome.runtime.sendMessage({ type: "RELEASE_COMPUTE", tabId: this.tabId });
+      } catch (_) {}
+    }
   }
 
   _recordEvalDuration(ms) {
@@ -392,9 +419,16 @@ export class MarketAnalyzer {
    * @returns {Object} Snapshot do lifecycle
    */
   tickLifecycle({ nowSec = null, decide = null, dataOk = null } = {}) {
+    if (this._isDestroyed) return null;
+
     const active = this.activeChannel.get();
     const pair = active?.pair || this.currentSymbol;
     const tf = active?.tf || this.timeframeSeconds;
+
+    if (!pair) {
+      this.currentLifecycleSnapshot = { status: "WAITING_CHANNEL", pair: null, tf };
+      return this.currentLifecycleSnapshot;
+    }
 
     if (tf !== LIFECYCLE.SUPPORTED_TF_SEC) {
       this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair, tf };
@@ -448,6 +482,7 @@ export class MarketAnalyzer {
   }
 
   handleSocketStatus(info) {
+    if (this._isDestroyed) return;
     if (info.status === "connected") {
       if (this._disconnectTimer) {
         clearTimeout(this._disconnectTimer);
@@ -466,20 +501,25 @@ export class MarketAnalyzer {
             this._disconnectTimer = null;
             this.socketStatus = "desconectado";
             logger.warn("WS", "Conexão WebSocket encerrada. Aguardando reconexão...");
-            this.quality.onDisconnect(this.currentSymbol, this.timeframeSeconds);
+            if (this.currentSymbol) {
+              this.quality.onDisconnect(this.currentSymbol, this.timeframeSeconds);
+            }
             this.updatePanelDisplay();
           }, 4000);
         }
       } else {
         this.socketStatus = "desconectado";
         logger.warn("WS", "Conexão WebSocket encerrada. Aguardando reconexão...");
-        this.quality.onDisconnect(this.currentSymbol, this.timeframeSeconds);
+        if (this.currentSymbol) {
+          this.quality.onDisconnect(this.currentSymbol, this.timeframeSeconds);
+        }
         this.updatePanelDisplay();
       }
     }
   }
 
   handleMarketEvent(event) {
+    if (this._isDestroyed) return;
     if (!event || !event.payload) return;
 
     if (event.sourceType === "history") {
@@ -493,32 +533,46 @@ export class MarketAnalyzer {
   }
 
   processHistoryPayload(payload, meta = null) {
+    if (this._isDestroyed) return;
     const active = this.activeChannel.get();
-    const targetPair = meta?.pair || active?.pair || this.currentSymbol;
-    const targetTf = meta?.tf || active?.tf || this.timeframeSeconds;
+    const activePair = active?.pair || null;
+    const targetTf = meta?.tf || active?.tf || this.timeframeSeconds || 60;
 
-    const bars = normalizeHistoryBars(payload, targetPair, targetTf);
+    const fallbackPair = meta?.pair || activePair || "UNKNOWN";
+    const bars = normalizeHistoryBars(payload, fallbackPair, targetTf);
     if (!bars || bars.length === 0) return;
 
-    const detectedSym = bars[0].symbol;
-    if (detectedSym && detectedSym !== this.currentSymbol) {
-      this._switchSymbol(detectedSym, targetTf);
+    // Guarda os candles no store por símbolo (aquecimento de watchlist)
+    this.store.ingestBatch(bars);
+
+    // Se NÃO há canal ativo ou se o histórico for de outro par: encerra sem mexer no lifecycle ou currentSymbol
+    if (!activePair) {
+      this.updatePanelDisplay();
+      return;
     }
 
-    this.store.ingestBatch(bars);
-    this.quality.onHistoryLoaded(this.currentSymbol, this.timeframeSeconds, bars.length);
+    const detectedSym = bars[0].symbol;
+    if (detectedSym !== activePair) {
+      return;
+    }
 
-    const last = this.store.getLast(this.currentSymbol, this.timeframeSeconds);
+    this.quality.onHistoryLoaded(activePair, targetTf, bars.length);
+    const last = this.store.getLast(activePair, targetTf);
     if (last) {
       this.lastPrice = last.close.toFixed(5);
     }
 
-    logger.info("HISTÓRICO", `${bars.length} candles carregados para ${this.currentSymbol} (${this.timeframeSeconds}s)`);
+    logger.info("HISTÓRICO", `${bars.length} candles carregados para ${activePair} (${targetTf}s)`);
     this.updatePanelDisplay();
   }
 
   processRealtimePayload(payload) {
+    if (this._isDestroyed) return;
     this._lastTickReceivedAt = Date.now();
+    if (!this._firstTickAt) {
+      this._firstTickAt = Date.now();
+    }
+
     if (this._disconnectTimer) {
       clearTimeout(this._disconnectTimer);
       this._disconnectTimer = null;
@@ -529,80 +583,83 @@ export class MarketAnalyzer {
 
     const active = this.activeChannel.get();
     const activePair = active?.pair || null;
-    const activeTf = active?.tf || this.timeframeSeconds;
+    const activeTf = active?.tf || this.timeframeSeconds || 60;
 
-    // Se o timeframe ativo não for M1 (60s), não gera sinal
-    if (activeTf !== LIFECYCLE.SUPPORTED_TF_SEC) {
-      this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair: activePair || this.currentSymbol, tf: activeTf };
-      return;
+    // Se o canal não chegar em 20s após o primeiro tick, log WARN 'canal subscribe não capturado' — NÃO adote par.
+    if (!activePair && !this._warnedNoChannel && (Date.now() - this._firstTickAt >= 20000)) {
+      this._warnedNoChannel = true;
+      logger.warn("CANAL", "canal subscribe não capturado");
     }
 
     const extractedSym = extractSymbolFromPayload(payload);
-    const incomingSym = extractedSym || (activePair || this.currentSymbol);
+    const incomingSym = extractedSym || activePair || "";
 
-    // Se há canal ativo explicitamente registrado, descarta ticks de outros ativos (I-03, I-10)
-    if (activePair && incomingSym && incomingSym !== activePair) {
-      return;
-    }
-
-    const sym = activePair || incomingSym || this.currentSymbol;
-    if (sym && sym !== this.currentSymbol) {
-      this._switchSymbol(sym, this.timeframeSeconds);
-    }
-
-    const candles = normalizeWebSocketPayload(payload, this.timeframeSeconds, { symbol: sym });
+    const candles = normalizeWebSocketPayload(payload, activeTf, { symbol: incomingSym });
     if (!candles || candles.length === 0) return;
 
     for (const candle of candles) {
       if (!isValidCandle(candle)) {
-        logger.warn("FEED", `Candle inválido rejeitado: [${candle?.symbol || sym}]`);
+        logger.warn("FEED", `Candle inválido rejeitado: [${candle?.symbol || incomingSym}]`);
         continue;
       }
 
-      const candleSym = candle.symbol || sym;
-      this.activeSymbols.add(candleSym);
+      const candleSym = candle.symbol || incomingSym;
+
+      // Guarda os candles no store (por símbolo para aquecer)
+      const result = this.store.ingest(candle);
+
+      // Se activeChannel.get() for null, NÃO rode lifecycle nem mude currentSymbol
+      if (!activePair) {
+        continue;
+      }
+
+      // Ticks de par diferente do canal ativo: ingest no store do par deles (já feito) e mais nada!
+      if (candleSym !== activePair) {
+        continue;
+      }
+
+      // Se o timeframe ativo não for M1 (60s), não gera sinal
+      if (activeTf !== LIFECYCLE.SUPPORTED_TF_SEC) {
+        this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair: activePair, tf: activeTf };
+        continue;
+      }
+
+      this.activeSymbols.add(activePair);
 
       // 1. Registra tick no IntraminuteTracker
       this.intraminuteTracker.recordTick(
-        sym,
-        this.timeframeSeconds,
+        activePair,
+        activeTf,
         candle.close,
         candle.timestamp,
         candle.receivedAt
       );
 
-      const result = this.store.ingest(candle);
-      this.quality.onRealtimeUpdate(sym, this.timeframeSeconds, result);
+      this.quality.onRealtimeUpdate(activePair, activeTf, result);
 
-      if (sym === this.currentSymbol) {
-        this.tickLifecycle();
-      }
+      this.tickLifecycle();
 
       const priceStr = candle.close.toFixed(5);
-      this.lastPrices.set(sym, priceStr);
-      if (sym === this.currentSymbol) {
-        this.lastPrice = priceStr;
-      }
+      this.lastPrices.set(activePair, priceStr);
+      this.lastPrice = priceStr;
 
       if (result.status === "NEW_CANDLE") {
-        if (sym === this.currentSymbol && this.timeframeSeconds === 60) {
+        if (activeTf === 60) {
           marketClock.observeCandleOpen(candle.timestamp, candle.receivedAt);
-          this.lifecycle.onCandleOpen(sym, this.timeframeSeconds, candle.timestamp, candle.open);
+          this.lifecycle.onCandleOpen(activePair, activeTf, candle.timestamp, candle.open);
         }
         logger.success(
           "STORE",
-          `Nova vela aberta em ${sym}. Fechamento anterior: ${result.closedCandle?.close?.toFixed(5)}`
+          `Nova vela aberta em ${activePair}. Fechamento anterior: ${result.closedCandle?.close?.toFixed(5)}`
         );
 
         if (result.closedCandle) {
-          if (sym === this.currentSymbol) {
-            this.lifecycle.onCandleClose(sym, this.timeframeSeconds, result.closedCandle);
-          }
-          const closedSeries = this.store.getCandles(sym, this.timeframeSeconds, 150);
-          this.registry.get(sym).observeClosedCandle(closedSeries);
+          this.lifecycle.onCandleClose(activePair, activeTf, result.closedCandle);
+          const closedSeries = this.store.getCandles(activePair, activeTf, 150);
+          this.registry.get(activePair).observeClosedCandle(closedSeries);
         }
 
-        const closedSeries = this.store.getCandles(sym, this.timeframeSeconds, 150);
+        const closedSeries = this.store.getCandles(activePair, activeTf, 150);
         const settled = this.signalAuditor.auditPendingSignals(closedSeries);
         for (const s of settled) {
           const stats = this.signalAuditor.getStats();
@@ -621,11 +678,11 @@ export class MarketAnalyzer {
           }
         }
       } else if (result.status === "DATA_GAP") {
-        logger.warn("ESTADO", `Gap detectado em ${sym}: de ${result.gapFrom} até ${result.gapTo}`);
+        logger.warn("ESTADO", `Gap detectado em ${activePair}: de ${result.gapFrom} até ${result.gapTo}`);
       } else if (result.status === "UPDATED" || result.status === "INITIALIZED") {
-        if (this._lastLoggedPrices.get(sym) !== priceStr) {
-          this._lastLoggedPrices.set(sym, priceStr);
-          logger.info("FEED", `${sym} tick: ${priceStr} (máx: ${candle.high.toFixed(5)}, mín: ${candle.low.toFixed(5)})`);
+        if (this._lastLoggedPrices.get(activePair) !== priceStr) {
+          this._lastLoggedPrices.set(activePair, priceStr);
+          logger.info("FEED", `${activePair} tick: ${priceStr} (máx: ${candle.high.toFixed(5)}, mín: ${candle.low.toFixed(5)})`);
         }
       }
     }
@@ -634,6 +691,46 @@ export class MarketAnalyzer {
   }
 
   updatePanelDisplay({ immediate = false } = {}) {
+    if (this._isDestroyed) return;
+
+    const domSymbol = detectActiveSymbolFromDOM();
+
+    // Se NÃO há canal ativo no activeChannel:
+    if (!this.currentSymbol) {
+      const stateObj = {
+        tabId: this.tabId,
+        windowId: this.windowId,
+        symbol: null,
+        pair: null,
+        tf: this.timeframeSeconds || 60,
+        domSymbol,
+        action: "WAIT",
+        signal: "WAIT",
+        label: "Esperando canal del gráfico…",
+        signalLabel: "Esperando canal del gráfico…",
+        quantLabel: "Esperando canal del gráfico…",
+        status: "WAITING_CHANNEL",
+        state: "WAITING_CHANNEL",
+        frameStatus: typeof window !== "undefined" && window !== window.top ? "iframe conectado" : "conectado",
+        wsStatus: this.socketStatus,
+        lastPrice: "---",
+        lifecycle: { current: null, trade: null, stats: this.signalAuditor.getStats() },
+        signalsHistory: this.signalAuditor.getSignals().slice(0, 20),
+        stats: this.signalAuditor.getStats(),
+        symbols: {},
+        allSymbols: [],
+        candleTimer: candleTimer.getState(),
+        clockOffsetMs: marketClock.offsetMs,
+        updatedAt: Date.now(),
+      };
+
+      if (this.panel) {
+        this.panel.update(stateObj);
+      }
+      this.saveMarketStateToStorage(stateObj, { immediate });
+      return;
+    }
+
     const symbolsMap = {};
     const symbolsList = Array.from(this.activeSymbols.size > 0 ? this.activeSymbols : [this.currentSymbol]);
 
@@ -796,6 +893,7 @@ export class MarketAnalyzer {
       windowId: this.windowId,
       symbol: this.currentSymbol,
       pair: this.currentSymbol,
+      domSymbol,
       tf: this.timeframeSeconds,
       status: activeObj.state || "BOOTING",
       clockOffsetMs: marketClock.offsetMs,
@@ -812,7 +910,8 @@ export class MarketAnalyzer {
   }
 
   saveMarketStateToStorage(stateObj, { immediate = false } = {}) {
-    if (typeof chrome === "undefined" || !chrome.storage?.local || !this.tabId) return;
+    if (this._isDestroyed) return;
+    if (typeof chrome === "undefined" || !this.tabId) return;
 
     const payload = {
       ...stateObj,
@@ -821,7 +920,7 @@ export class MarketAnalyzer {
       pair: this.currentSymbol,
       symbol: this.currentSymbol,
       tf: this.timeframeSeconds,
-      status: stateObj.state || "BOOTING",
+      status: stateObj.state || stateObj.status || "BOOTING",
       clockOffsetMs: marketClock.offsetMs,
       updatedAt: Date.now(),
     };
@@ -845,12 +944,29 @@ export class MarketAnalyzer {
     this._lastStateSaveTime = now;
     this._latestStateToSave = null;
 
-    try {
-      chrome.storage.local.set({
-        [`ifx:tab:${this.tabId}:state`]: payload,
-      });
-      this._storageWritesCount++;
-    } catch (_) {}
+    if (chrome.runtime?.sendMessage) {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: "ORACLE_SAVE_TAB_STATE",
+            tabId: this.tabId,
+            state: payload,
+          },
+          (res) => {
+            if (res && res.saved) {
+              this._storageWritesCount++;
+            }
+          }
+        );
+      } catch (_) {}
+    } else if (chrome.storage?.local?.set) {
+      try {
+        chrome.storage.local.set({
+          [`ifx:tab:${this.tabId}:state`]: payload,
+        });
+        this._storageWritesCount++;
+      } catch (_) {}
+    }
   }
 
   get quantPortfolio() {
@@ -858,64 +974,18 @@ export class MarketAnalyzer {
   }
 }
 
-export const COMPUTE_HOSTS = ["chart.b2trading.io", "traderoom.b2trading.io"];
+export const COMPUTE_HOSTS = ["chart.b2trading.io"];
 
-export function isComputeFrame(hostname = "", { hasChartIframe = null, isTop = null } = {}) {
+export function isComputeFrame(hostname = "") {
   const host = hostname || (typeof location !== "undefined" ? location.hostname : "");
-  if (!host) return false;
-
-  // Iframe dedicado do gráfico é sempre frame preferencial de cálculo
-  if (host === "chart.b2trading.io") {
-    return true;
-  }
-
-  // Página principal da corretora (traderoom.b2trading.io)
-  if (host === "traderoom.b2trading.io") {
-    if (hasChartIframe === true) {
-      return false; // cede cálculo para o iframe se este existir
-    }
-    if (hasChartIframe === false) {
-      return true; // assume como fallback
-    }
-
-    // No navegador real (DOM disponível):
-    if (typeof window !== "undefined" && typeof document !== "undefined") {
-      const topWin = isTop !== null ? isTop : (window.self === window.top);
-      if (!topWin) return false; // iframes aninhados secundários não calculam
-
-      // Se a página NÃO possui iframe de gráfico, o frame TOP assume como fallback
-      const chartIframeFound = Boolean(document.querySelector('iframe[src*="chart.b2trading.io"]'));
-      return !chartIframeFound;
-    }
-
-    // Ambiente de teste sem DOM e sem opções explícitas (mantém assinatura de isolamento)
-    return false;
-  }
-
-  return false;
+  return host === "chart.b2trading.io";
 }
 
-// Inicialização automática do Analyzer no content script
+// Inicialização automática do Analyzer no content script (exclusivo para iframe do gráfico)
 if (typeof window !== "undefined") {
   const host = window.location.hostname;
   if (isComputeFrame(host)) {
     window.__oracleAnalyzer = new MarketAnalyzer();
-
-    // Se este frame for o iframe do gráfico, anuncia para o frame TOP para que ele ceda o cálculo
-    if (window.self !== window.top && host === "chart.b2trading.io") {
-      try {
-        window.top.postMessage({ type: "ORACLE_CHART_COMPUTE_ACTIVE" }, "*");
-      } catch (_) {}
-    } else if (window.self === window.top) {
-      // Se estiver no frame TOP (fallback), escuta caso o iframe do gráfico apareça e reclame o cálculo
-      window.addEventListener("message", (ev) => {
-        if (ev.data?.type === "ORACLE_CHART_COMPUTE_ACTIVE" && window.__oracleAnalyzer) {
-          logger.info("SISTEMA", "Iframe chart.b2trading.io ativo detectado. Frame TOP cedendo cálculo.");
-          window.__oracleAnalyzer.destroy();
-          window.__oracleAnalyzer = null;
-        }
-      });
-    }
   } else {
     let warned = false;
     initBridgeListener({

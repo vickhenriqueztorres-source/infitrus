@@ -108,6 +108,7 @@ test(
   "Caso 4 (ETAPA 04) — R-01/R-03: virada da vela não inverte sinal de CALL para PUT nos primeiros segundos",
   () => {
     const analyzer = new MarketAnalyzer();
+    analyzer.activeChannel.onChannel({ action: "subscribe", pair: "EURUSD", tf: 60 });
     const t = 1727010000;
     let newSignalEvents = 0;
 
@@ -156,6 +157,7 @@ test(
 
     // Nenhum novo sinal deve ser gerado durante a janela de transição
     assert.equal(newSignalEvents, 1, "Não deve disparar novos sinais durante a transição da vela");
+    analyzer.destroy();
   }
 );
 

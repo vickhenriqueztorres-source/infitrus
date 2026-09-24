@@ -11,6 +11,7 @@ import {
   extractSymbolFromPayload,
   detectActiveSymbolFromDOM,
 } from "../src/content/analyzer.js";
+import { handleServiceWorkerMessage } from "../src/background/service-worker.js";
 
 test("extractSymbolFromPayload: Extrai símbolo de múltiplos formatos heterogêneos de brokers", () => {
   // 1. Objeto direto com 'pair'
@@ -75,7 +76,7 @@ test("detectActiveSymbolFromDOM: Detecta o ativo ativo a partir de elementos do 
   }
 });
 
-test("MarketAnalyzer: Sincroniza e adota ARBITRIUM_otc a partir de payload com 'asset'", () => {
+test("MarketAnalyzer: Ingesta candles de ARBITRIUM_otc para warm-up mas só adota par ativo após canal subscribe", () => {
   const analyzer = new MarketAnalyzer();
 
   const arbitriumPayload = {
@@ -97,11 +98,22 @@ test("MarketAnalyzer: Sincroniza e adota ARBITRIUM_otc a partir de payload com '
 
   analyzer.processRealtimePayload(arbitriumPayload);
 
-  assert.equal(analyzer.currentSymbol, "ARBITRIUM_OTC");
-  assert.equal(analyzer.activeSymbols.has("ARBITRIUM_OTC"), true);
+  // Sem canal ativo, currentSymbol permanece null (não há adoção/troca por tick)
+  assert.equal(analyzer.currentSymbol, null);
+  // O candle foi devidamente guardado no Store para warm-up
   const last = analyzer.store.getLast("ARBITRIUM_OTC", 60);
   assert.ok(last);
   assert.equal(last.close, 100.8);
+
+  // Somente com evento formal de canal é que o símbolo é adotado
+  analyzer.activeChannel.onChannel({
+    action: "subscribe",
+    pair: "ARBITRIUM_OTC",
+    tf: 60,
+  });
+
+  assert.equal(analyzer.currentSymbol, "ARBITRIUM_OTC");
+  assert.equal(analyzer.activeSymbols.has("ARBITRIUM_OTC"), true);
 
   analyzer.destroy();
 });
@@ -151,4 +163,83 @@ test("MarketAnalyzer: Desconexão breve de WebSocket não derruba qualidade imed
   assert.equal(analyzer._disconnectTimer, null, "Timer de carência deve ter sido limpo sem oscilar o estado");
 
   analyzer.destroy();
+});
+
+test("Service Worker: Trava CLAIM_COMPUTE rejeita segundo frame e ORACLE_SAVE_TAB_STATE rejeita frame não-proprietário", () => {
+  const origChrome = globalThis.chrome;
+  const sessionStorage = {};
+  const localStorage = {};
+
+  globalThis.chrome = {
+    storage: {
+      session: {
+        get: (keys, cb) => {
+          const res = {};
+          for (const k of keys) {
+            if (sessionStorage[k] !== undefined) res[k] = sessionStorage[k];
+          }
+          cb(res);
+        },
+        set: (obj, cb) => {
+          Object.assign(sessionStorage, obj);
+          if (cb) cb();
+        },
+        remove: (keys, cb) => {
+          for (const k of keys) delete sessionStorage[k];
+          if (cb) cb();
+        },
+      },
+      local: {
+        set: (obj, cb) => {
+          Object.assign(localStorage, obj);
+          if (cb) cb();
+        },
+      },
+    },
+  };
+
+  try {
+    const tabId = 42;
+    let resClaim1 = null;
+    let resClaim2 = null;
+
+    // Frame 100 reivindica posse de cálculo para tab 42
+    handleServiceWorkerMessage(
+      { type: "CLAIM_COMPUTE", tabId, frameId: 100 },
+      { tab: { id: tabId }, frameId: 100 },
+      (res) => { resClaim1 = res; }
+    );
+    assert.deepEqual(resClaim1, { granted: true, frameId: 100, tabId });
+
+    // Frame 200 (segundo frame) tenta reivindicar para a mesma tab 42 -> DENIED
+    handleServiceWorkerMessage(
+      { type: "CLAIM_COMPUTE", tabId, frameId: 200 },
+      { tab: { id: tabId }, frameId: 200 },
+      (res) => { resClaim2 = res; }
+    );
+    assert.deepEqual(resClaim2, { granted: false, reason: "DENIED" });
+
+    // Frame 100 (proprietário) grava estado da aba -> permitido
+    let resSaveOwner = null;
+    handleServiceWorkerMessage(
+      { type: "ORACLE_SAVE_TAB_STATE", tabId, frameId: 100, state: { symbol: "EURUSD" } },
+      { tab: { id: tabId }, frameId: 100 },
+      (res) => { resSaveOwner = res; }
+    );
+    assert.deepEqual(resSaveOwner, { saved: true });
+    assert.deepEqual(localStorage[`ifx:tab:${tabId}:state`], { symbol: "EURUSD" });
+
+    // Frame 200 (não-proprietário) tenta gravar estado -> rejeitado com DENIED_NOT_OWNER
+    let resSaveImposter = null;
+    handleServiceWorkerMessage(
+      { type: "ORACLE_SAVE_TAB_STATE", tabId, frameId: 200, state: { symbol: "BTCUSD" } },
+      { tab: { id: tabId }, frameId: 200 },
+      (res) => { resSaveImposter = res; }
+    );
+    assert.deepEqual(resSaveImposter, { saved: false, reason: "DENIED_NOT_OWNER" });
+    // Estado gravado no storage local não foi adulterado pelo frame invasor
+    assert.deepEqual(localStorage[`ifx:tab:${tabId}:state`], { symbol: "EURUSD" });
+  } finally {
+    globalThis.chrome = origChrome;
+  }
 });

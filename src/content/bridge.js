@@ -97,11 +97,11 @@ let activeSessionId = null;
  * @param {Function} [options.onChannel] - Callback({ type: "ORACLE_CHANNEL", sessionId, action, pair, tf, at })
  */
 export function initBridgeListener(options = {}) {
-  if (typeof window === "undefined") return;
-  if (window.__oracleBridgeListenerActive) return;
+  if (typeof window === "undefined") return () => {};
+  if (window.__oracleBridgeListenerActive) return () => {};
   window.__oracleBridgeListenerActive = true;
 
-  window.addEventListener("message", (event) => {
+  const messageHandler = (event) => {
     // Filtro rápido de tipo
     if (
       !event.data ||
@@ -150,9 +150,15 @@ export function initBridgeListener(options = {}) {
         at: data.at,
       });
     }
-  });
+  };
 
+  window.addEventListener("message", messageHandler);
   console.log("[OracleQuant] Bridge isolada aguardando telemetria no frame:", window.location.href);
+
+  return () => {
+    window.removeEventListener("message", messageHandler);
+    window.__oracleBridgeListenerActive = false;
+  };
 }
 
 // Inicialização automática em contexto de extensão
