@@ -86,10 +86,9 @@ export class CandleStore {
         last.volume = candle.volume;
       }
       last.receivedAt = candle.receivedAt;
-      // Se a atualização indicar explicitamente fechamento, honra
-      if (candle.closed) {
-        last.closed = true;
-      }
+      // Garante que a vela aberta em atualização NUNCA seja fechada prematuramente no mesmo timestamp.
+      // candle.closed só vira true quando o próximo timestamp contíguo chegar (Caso 3 ou 4).
+      last.closed = false;
 
       const result = { status: "UPDATED", candle: last };
       this._emit(key, "updated", result);

@@ -39,6 +39,43 @@ export class SignalLifecycle {
     this._emit(phase, lc);
   }
 
+  emitSignal(pair, tf, targetTs, decision, nowSec = Date.now() / 1000) {
+    const key = this._key(pair, tf, targetTs);
+    let lc = this.byKey.get(key);
+    const formingTs = targetTs - tf;
+    const direction = decision.action === "BUY" ? "CALL" : decision.action === "SELL" ? "PUT" : decision.action;
+
+    if (!lc) {
+      lc = {
+        id: key,
+        pair,
+        tf,
+        formingTs,
+        targetTs,
+        phase: Phase.ENTRY_NOW,
+        direction,
+        snapshot: decision,
+        lockedAt: nowSec,
+        entryPrice: null,
+        closePrice: null,
+        result: null,
+        reason: null,
+      };
+      this.byKey.set(key, lc);
+      this._emit(Phase.ENTRY_NOW, lc);
+    } else {
+      // Imutabilidade estrita: se já possui direção travada, NUNCA sobrescreve
+      if (!lc.direction) {
+        lc.phase = Phase.ENTRY_NOW;
+        lc.direction = direction;
+        lc.snapshot = decision;
+        lc.lockedAt = nowSec;
+        this._emit(Phase.ENTRY_NOW, lc);
+      }
+    }
+    return lc;
+  }
+
   step({ pair, tf, nowSec, dataOk, decide }) {
     this.advanceTime(pair, tf, nowSec);
 

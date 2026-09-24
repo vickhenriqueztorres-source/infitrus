@@ -25,6 +25,7 @@ import { SignalLifecycle, Phase } from "../strategy/signal-lifecycle.js";
 import { ActiveChannel } from "../market/active-channel.js";
 import { LIFECYCLE } from "../strategy/lifecycle-config.js";
 import { signalAuditor } from "../strategy/signal-auditor.js";
+import { signalDeduplicator, DEFAULT_STRATEGY_VERSION } from "../strategy/signal-deduplicator.js";
 import { intraminuteTracker } from "../market/intraminute-tracker.js";
 import { candleTimer } from "../utils/candle-timer.js";
 import { marketClock } from "../utils/market-clock.js";
@@ -150,6 +151,8 @@ export class MarketAnalyzer {
     this.payout = 0.80;
     this.registry = new PortfolioRegistry((pair) => new QuantPortfolio({ payout: this.payout, minEdge: 0.015 }));
     this.signalAuditor = signalAuditor;
+    this.deduplicator = signalDeduplicator;
+    this.strategyVersion = DEFAULT_STRATEGY_VERSION;
     this.lifecycle = new SignalLifecycle();
     this.lastDecideAt = 0;
     this.lastCachedDecision = null;
@@ -222,6 +225,24 @@ export class MarketAnalyzer {
         );
         this.updatePanelDisplay({ immediate: true });
       } else if (event === Phase.ENTRY_NOW) {
+        this.signalAuditor.recordSignal({
+          id: lc.id,
+          action: lc.direction,
+          symbol: lc.pair,
+          timeframeSeconds: lc.tf,
+          candleTimestamp: lc.formingTs,
+          targetTimestamp: lc.targetTs,
+          probability: lc.snapshot?.probability ?? 0.5,
+          conservativeProbability: lc.snapshot?.conservativeProbability ?? lc.snapshot?.probability,
+          ev: lc.snapshot?.ev ?? 0,
+          edge: lc.snapshot?.edge ?? 0,
+          quality: lc.snapshot?.quality ?? 0,
+          payout: this.registry.get(lc.pair).payout,
+          subStrategy: lc.snapshot?.subStrategy,
+          primaryStrategyName: lc.snapshot?.strategyName || lc.snapshot?.subStrategy,
+          correlationGroup: lc.snapshot?.correlationGroup,
+          reasons: lc.snapshot?.reasons || [],
+        });
         logger.success(
           "SINAL",
           `⚡ ENTRA AHORA [${lc.direction} ${lc.pair}]: Apertura confirmada | Ejecute en el broker inmediatamente`
@@ -524,42 +545,9 @@ export class MarketAnalyzer {
 
     const prevPhase = this.currentLifecycleSnapshot?.trade?.phase || this.currentLifecycleSnapshot?.current?.phase || "SCANNING";
 
-    const decideFn = decide ?? (() => {
-      const now = Date.now();
-      if (now - this.lastDecideAt < 300 && this.lastCachedDecision) {
-        return this.lastCachedDecision;
-      }
-      const closedCandles = this.store.getCandles(pair, tf, 150);
-      const microMetrics = this.intraminuteTracker.getCurrentMetrics(pair, tf);
-      const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-      const decision = this.registry.get(pair).evaluate({
-        symbol: pair,
-        timeframeSeconds: tf,
-        candles: closedCandles,
-        microMetrics,
-        isReady: currentDataOk,
-        gapCount: 0,
-        isStale: false,
-      });
-      const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
-      this._recordEvalDuration(dur);
-
-      const targetTs = Math.floor(currentNowSec / 60) * 60 + 60;
-      rec("DECIDE_CALL", {
-        par: pair,
-        targetTs,
-        hashCandles: hashCandles(closedCandles),
-        action: decision?.action,
-        prob: decision?.probability,
-        subStrategy: decision?.subStrategy || decision?.strategyName,
-        candlesCount: closedCandles.length,
-      });
-
-      this.lastDecideAt = now;
-      this.lastCachedDecision = decision;
-      this.quantReport = decision;
-      return decision;
-    });
+    // A avaliação agora ocorre ESTRITAMENTE em candle fechado via _evaluateOnClosedCandle.
+    // decideFn só é invocado se decide for explicitamente fornecido (ex: testes com mocks).
+    const decideFn = decide ?? null;
 
     const snapshot = this.lifecycle.step({
       pair,
@@ -797,9 +785,17 @@ export class MarketAnalyzer {
             logger.info("SINAL", `― RESULTADO [${s.direction} ${s.symbol}]: DOJI (Empate)`);
           }
         }
+        // GATILHO ÚNICO DE DECISÃO: somente com candle fechado e dataState READY/CANDLE_CLOSED
+        this._evaluateOnClosedCandle(activePair, activeTf, result.closedCandle, candle);
       } else if (result.status === "DATA_GAP") {
         logger.warn("ESTADO", `Gap detectado em ${activePair}: de ${result.gapFrom} até ${result.gapTo}`);
       } else if (result.status === "UPDATED" || result.status === "INITIALIZED") {
+        rec("DECIDE_BLOCKED", {
+          par: activePair,
+          ts: candle.timestamp,
+          closed: false,
+          reason: "INTRABAR_TICK",
+        });
         if (this._lastLoggedPrices.get(activePair) !== priceStr) {
           this._lastLoggedPrices.set(activePair, priceStr);
           logger.info("FEED", `${activePair} tick: ${priceStr} (máx: ${candle.high.toFixed(5)}, mín: ${candle.low.toFixed(5)})`);
@@ -808,6 +804,103 @@ export class MarketAnalyzer {
     }
 
     this.updatePanelDisplay();
+  }
+
+  _evaluateOnClosedCandle(pair, tf, closedCandle, newCandle) {
+    if (this._isDestroyed) return;
+
+    const qReport = this.quality.getReport(pair, tf);
+    const isReady = this.store.isReady(pair, tf);
+    const dataState = (isReady && qReport.state === MarketState.READY) ? "READY" : (qReport.state || "NOT_READY");
+
+    // 1. Guarda: candle fechado e dataState READY ou CANDLE_CLOSED
+    if (!closedCandle?.closed || !["READY", "CANDLE_CLOSED"].includes(dataState)) {
+      rec("DECIDE_BLOCKED", {
+        par: pair,
+        ts: closedCandle?.timestamp ?? null,
+        closed: Boolean(closedCandle?.closed),
+        dataState,
+        reason: !closedCandle?.closed ? "CANDLE_NOT_CLOSED" : `INVALID_DATA_STATE_${dataState}`,
+      });
+      return;
+    }
+
+    // 2. Chave canônica de deduplicação (PRD)
+    const chave = this.deduplicator.buildKey(pair, tf, closedCandle.timestamp, this.strategyVersion);
+
+    // 3. Deduplicação infalível: se já emitido para este candle, ignora
+    if (this.deduplicator.has(chave)) {
+      rec("SIGNAL_SKIP", {
+        chave,
+        par: pair,
+        ts: closedCandle.timestamp,
+        reason: "ALREADY_EMITTED",
+      });
+      return;
+    }
+
+    // 4. Executa avaliação puramente sobre a série fechada
+    const closedCandles = this.store.getCandles(pair, tf, 150);
+    const microMetrics = this.intraminuteTracker.getCurrentMetrics(pair, tf);
+    const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+
+    const decision = this.registry.get(pair).evaluate({
+      symbol: pair,
+      timeframeSeconds: tf,
+      candles: closedCandles,
+      microMetrics,
+      isReady: true,
+      dataState,
+      gapCount: 0,
+      isStale: false,
+    });
+
+    const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
+    this._recordEvalDuration(dur);
+
+    rec("DECIDE_CALL", {
+      par: pair,
+      targetTs: newCandle.timestamp,
+      hashCandles: hashCandles(closedCandles),
+      action: decision?.action,
+      prob: decision?.probability,
+      subStrategy: decision?.subStrategy || decision?.strategyName,
+      candlesCount: closedCandles.length,
+    });
+
+    const rawAction = decision?.action;
+    const isSignal = rawAction === "CALL" || rawAction === "PUT" || rawAction === "BUY" || rawAction === "SELL";
+    const direction = isSignal ? (rawAction === "BUY" ? "CALL" : rawAction === "SELL" ? "PUT" : rawAction) : "WAIT";
+
+    // Registra imediatamente no deduplicador para este candle fechado não ser reprocessado
+    this.deduplicator.record(chave, {
+      action: direction,
+      probability: decision?.probability ?? null,
+      price: closedCandle.close,
+    });
+
+    if (isSignal) {
+      decision.action = direction;
+
+      rec("SIGNAL_EMIT", {
+        chave,
+        par: pair,
+        targetTs: newCandle.timestamp,
+        hashCandles: hashCandles(closedCandles),
+        action: direction,
+        prob: decision.probability,
+        subStrategy: decision.subStrategy || decision.strategyName,
+      });
+
+      // Emite sinal diretamente para o novo candle que está iniciando
+      this.lifecycle.emitSignal(pair, tf, newCandle.timestamp, decision, newCandle.timestamp);
+      if (Number.isFinite(newCandle.open)) {
+        this.lifecycle.onCandleOpen(pair, tf, newCandle.timestamp, newCandle.open);
+      }
+    }
+
+    this.quantReport = decision;
+    this.updatePanelDisplay({ immediate: true });
   }
 
   updatePanelDisplay({ immediate = false } = {}) {

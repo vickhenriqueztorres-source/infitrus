@@ -15,6 +15,8 @@
 
 import { getLatestEMAValues } from "../indicators/ema.js";
 import { getLatestRSI } from "../indicators/rsi.js";
+import { signalDeduplicator, DEFAULT_STRATEGY_VERSION } from "./signal-deduplicator.js";
+import { rec } from "../diagnostics/flight-recorder.js";
 
 export const SignalAction = Object.freeze({
   BUY: "BUY",
@@ -58,9 +60,30 @@ export class StrategyEngine {
    *   reasons: string[]
    * }}
    */
-  evaluate({ symbol, timeframeSeconds, candles = [], isReady = true }) {
+  evaluate({
+    symbol,
+    timeframeSeconds,
+    candles = [],
+    isReady = true,
+    candle = null,
+    dataState = null,
+  } = {}) {
     const sym = String(symbol || "").trim().toUpperCase();
     const len = candles.length;
+    const lastCandle = candle || (len > 0 ? candles[len - 1] : null);
+    const effectiveDataState = dataState || (isReady ? "READY" : "NOT_READY");
+
+    // 0. Guarda estrita (PRD): decisão SOMENTE em candle fechado e dataState READY ou CANDLE_CLOSED
+    if (!lastCandle || !lastCandle.closed || !["READY", "CANDLE_CLOSED"].includes(effectiveDataState)) {
+      rec("DECIDE_BLOCKED", {
+        par: sym,
+        ts: lastCandle?.timestamp ?? null,
+        closed: Boolean(lastCandle?.closed),
+        dataState: effectiveDataState,
+        reason: !lastCandle?.closed ? "CANDLE_NOT_CLOSED" : `INVALID_DATA_STATE_${effectiveDataState}`,
+      });
+      return null;
+    }
 
     // 1. Verificação de aquecimento mínimo
     if (!isReady || len < this.minWarmupCandles) {
@@ -79,7 +102,6 @@ export class StrategyEngine {
       return res;
     }
 
-    const lastCandle = candles[len - 1];
     const prices = candles.map((c) => c.close);
 
     // 2. Cálculo dos indicadores técnicos
@@ -141,12 +163,14 @@ export class StrategyEngine {
       reasons.push("Sem cruzamento confirmado no último candle");
     }
 
-    // 4. Deduplicação de Sinal (PRD F-008)
-    const dedupKey = `${sym}:${timeframeSeconds}:${lastCandle.timestamp}`;
-    const previousEmitted = this._dedupMap.get(dedupKey);
-    const isNew = action !== SignalAction.WAIT && previousEmitted !== action;
+    // 4. Deduplicação de Sinal (PRD F-008 com chave canônica)
+    const dedupKey = signalDeduplicator.buildKey(sym, timeframeSeconds, lastCandle.timestamp, DEFAULT_STRATEGY_VERSION);
+    const isAlreadyEmitted = signalDeduplicator.has(dedupKey);
+    const previousEmitted = isAlreadyEmitted ? signalDeduplicator.get(dedupKey)?.action : this._dedupMap.get(dedupKey);
+    const isNew = action !== SignalAction.WAIT && previousEmitted !== action && !isAlreadyEmitted;
 
     if (action !== SignalAction.WAIT) {
+      signalDeduplicator.record(dedupKey, { action, symbol: sym, price: lastCandle.close });
       this._dedupMap.set(dedupKey, action);
       // Limpeza de memória periódica do mapa de deduplicação
       if (this._dedupMap.size > 200) {

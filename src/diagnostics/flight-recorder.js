@@ -102,8 +102,8 @@ export function rec(type, payload = {}, options = {}) {
       payload,
     };
 
-    // 1. Se estiver executando no próprio Service Worker: grava diretamente no buffer
-    if (ctx === "sw" || (typeof window === "undefined" && typeof importScripts === "function")) {
+    // 1. Se estiver executando no próprio Service Worker ou em ambiente de teste Node (sem chrome.runtime.sendMessage):
+    if (ctx === "sw" || (typeof window === "undefined" && (typeof chrome === "undefined" || !chrome.runtime?.sendMessage))) {
       swIngestRecord(record);
       return record;
     }

@@ -45,6 +45,7 @@ test("Strategy Engine: Respeito ao aquecimento de velas", () => {
     high: 1.09,
     low: 1.07,
     close: 1.085,
+    closed: true,
   }));
 
   const result = engine.evaluate({
@@ -66,12 +67,12 @@ test("Strategy Engine: Detecção precisa de COMPRA (BUY) no cruzamento de alta"
   let price = 100;
   for (let i = 0; i < 25; i++) {
     price -= 0.5; // queda anterior para garantir EMA9 <= EMA21
-    candles.push({ timestamp: 1727010000 + i * 60, open: price, high: price + 0.2, low: price - 0.2, close: price });
+    candles.push({ timestamp: 1727010000 + i * 60, open: price, high: price + 0.2, low: price - 0.2, close: price, closed: true });
   }
   // Forte arrancada para cruzar para cima
   for (let i = 25; i < 30; i++) {
     price += 4.0;
-    candles.push({ timestamp: 1727010000 + i * 60, open: price - 1, high: price + 1, low: price - 1, close: price });
+    candles.push({ timestamp: 1727010000 + i * 60, open: price - 1, high: price + 1, low: price - 1, close: price, closed: true });
   }
 
   // O cruzamento ocorre exatamente no candle de índice 28 (total 29 velas)
@@ -95,6 +96,37 @@ test("Strategy Engine: Detecção precisa de COMPRA (BUY) no cruzamento de alta"
     isReady: true,
   });
   assert.equal(resultWait.action, SignalAction.WAIT);
+});
+
+test("Strategy Engine: Bloqueio estrito de candle aberto (closed=false) e dataState inválido", () => {
+  const engine = new StrategyEngine();
+  const openCandles = Array.from({ length: 25 }, (_, i) => ({
+    timestamp: 1727010000 + i * 60,
+    open: 1.08,
+    high: 1.09,
+    low: 1.07,
+    close: 1.085,
+    closed: false,
+  }));
+
+  // Candle aberto deve retornar null
+  const resOpen = engine.evaluate({
+    symbol: "EURUSD",
+    timeframeSeconds: 60,
+    candles: openCandles,
+    isReady: true,
+  });
+  assert.equal(resOpen, null, "Candle aberto deve bloquear evaluate()");
+
+  // dataState diferente de READY ou CANDLE_CLOSED deve retornar null
+  const closedCandles = openCandles.map((c) => ({ ...c, closed: true }));
+  const resStale = engine.evaluate({
+    symbol: "EURUSD",
+    timeframeSeconds: 60,
+    candles: closedCandles,
+    dataState: "STALE",
+  });
+  assert.equal(resStale, null, "dataState STALE deve bloquear evaluate()");
 });
 
 test("Strategy Engine: Deduplicação e garantia somente leitura", () => {
