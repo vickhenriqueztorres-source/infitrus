@@ -6,10 +6,31 @@ import {
   swRestoreState,
   swBuildExportBundle,
 } from "../diagnostics/flight-recorder.js";
+import { signalStore } from "../storage/signal-store.js";
 
 configureFlightRecorder({ ctx: "sw" });
 swRestoreState().catch(() => {});
 rec("SW_BOOT", { motivo: "sw_evaluation_or_wake_up", time: Date.now() });
+
+export async function flushPendingSignals() {
+  if (typeof chrome === "undefined" || !chrome.storage?.session?.get) return;
+  try {
+    const res = await chrome.storage.session.get("ifx:pending_signals");
+    const pending = res?.["ifx:pending_signals"];
+    if (Array.isArray(pending) && pending.length > 0) {
+      for (const signal of pending) {
+        try {
+          await signalStore.putSignal(signal);
+          await signalStore.markCommitted(signal.id);
+          rec("STORAGE_TX_SUCCESS", { id: signal.id, source: "pending_flush" });
+        } catch (e) {
+          rec("STORAGE_TX_FAIL", { id: signal.id, error: e?.message || String(e), source: "pending_flush" });
+        }
+      }
+      await chrome.storage.session.remove("ifx:pending_signals");
+    }
+  } catch (_) {}
+}
 
 function configureDockedPanel() {
   if (typeof chrome === "undefined" || !chrome.sidePanel?.setPanelBehavior) return;
@@ -62,6 +83,7 @@ export async function setupOffscreenDocument() {
 
 // Inicia imediatamente ao carregar o service worker
 setupOffscreenDocument().catch(() => {});
+flushPendingSignals().catch(() => {});
 
 if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
   chrome.runtime.onInstalled.addListener((details) => {
@@ -69,6 +91,7 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
     console.log("[Inflitrus] Extensión instalada.");
     configureDockedPanel();
     setupOffscreenDocument().catch(() => {});
+    flushPendingSignals().catch(() => {});
     try {
       chrome.storage.local.clear().catch(() => {});
     } catch (_) {}
@@ -79,6 +102,7 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onStartup) {
   chrome.runtime.onStartup.addListener(() => {
     rec("SW_BOOT", { motivo: "onStartup_browser_start", time: Date.now() });
     setupOffscreenDocument().catch(() => {});
+    flushPendingSignals().catch(() => {});
   });
 }
 
@@ -206,6 +230,21 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
       windowId: sender?.tab?.windowId || null,
     });
     return;
+  }
+
+  // R4, R5, R6: Leitura de sinais transacionais do IndexedDB para o Side Panel
+  if (message?.type === "GET_SIGNALS") {
+    const limit = Number(message.limit) || 150;
+    const filter = {};
+    if (message.tabId != null) filter.tabId = Number(message.tabId);
+    if (message.symbol) filter.symbol = message.symbol;
+
+    signalStore.getSignals(limit, filter).then((signals) => {
+      sendResponse({ ok: true, signals });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: err?.message || String(err), signals: [] });
+    });
+    return true; // resposta assíncrona
   }
 
   if (message?.type === "ENSURE_OFFSCREEN") {

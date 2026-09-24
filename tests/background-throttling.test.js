@@ -177,7 +177,7 @@ test("R2 — Simulação de 200 ticks emburacados/backlog: nenhum candle frozen 
   }
 });
 
-test("R2 — Sinais de velas fechadas há mais de 65s gravam late=true e NÃO disparam alerta (SIGNAL_LATE)", () => {
+test("R2 — Sinais de velas fechadas há mais de 65s gravam late=true e NÃO disparam alerta (SIGNAL_LATE)", async () => {
   swResetRecords();
   const analyzer = new MarketAnalyzer();
   const pair = "ARBITRIUM_OTC";
@@ -226,7 +226,7 @@ test("R2 — Sinais de velas fechadas há mais de 65s gravam late=true e NÃO di
     open: 101.5,
   };
 
-  analyzer._evaluateOnClosedCandle(pair, tf, oldClosedCandle, newCandle);
+  await analyzer._evaluateOnClosedCandle(pair, tf, oldClosedCandle, newCandle);
 
   // Verifica que foi registrado no deduplicador com late: true
   const chave = analyzer.deduplicator.buildKey(pair, tf, oldClosedCandle.timestamp, analyzer.strategyVersion);

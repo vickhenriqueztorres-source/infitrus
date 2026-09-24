@@ -16,6 +16,8 @@
  *     Lucro teórico acumulado em unidades
  */
 
+import { signalStore } from "../storage/signal-store.js";
+
 export class SignalAuditor {
   constructor(options = {}) {
     this.maxStoredSignals = options.maxStoredSignals || 150;
@@ -43,17 +45,22 @@ export class SignalAuditor {
   setTabId(tabId) {
     if (!tabId) return;
     this.tabId = Number(tabId);
-    if (typeof chrome !== "undefined" && chrome.storage?.local) {
-      try {
-        const key = `ifx:tab:${this.tabId}:signals`;
-        chrome.storage.local.get([key], (res) => {
-          if (Array.isArray(res?.[key])) {
-            this.signals = res[key];
-            this._recomputeStats();
-          }
-        });
-      } catch (_) {}
-    }
+    signalStore.getSignals(150, { tabId: this.tabId }).then((sigs) => {
+      if (Array.isArray(sigs) && sigs.length > 0) {
+        this.signals = sigs;
+        this._recomputeStats();
+      } else if (typeof chrome !== "undefined" && chrome.storage?.local) {
+        try {
+          const key = `ifx:tab:${this.tabId}:signals`;
+          chrome.storage.local.get([key], (res) => {
+            if (Array.isArray(res?.[key])) {
+              this.signals = res[key];
+              this._recomputeStats();
+            }
+          });
+        } catch (_) {}
+      }
+    }).catch(() => {});
   }
 
   /**
@@ -342,14 +349,28 @@ export class SignalAuditor {
   }
 
   /**
-   * Persiste no chrome.storage.local da aba vinculada
+   * Persiste sinais transacionalmente no IndexedDB (R3) com fallback transitório para os últimos 10
    * @private
    */
-  _persistStorage() {
+  async _persistStorage() {
+    const signals = this.signals.slice(0, 150);
+    for (const signal of signals) {
+      const chave = signal.id || `${signal.symbol}:${signal.timeframeSeconds || signal.timeframe || 60}:${signal.candleTimestamp || signal.timestamp}:${signal.strategyVersion || "1.0.0"}`;
+      try {
+        await signalStore.putSignal({
+          ...signal,
+          id: chave,
+          tabId: this.tabId,
+          committed: true,
+        });
+      } catch (_) {}
+    }
+
+    // Fallback opcional apenas para os últimos 10 sinais (conforme R3)
     if (typeof chrome !== "undefined" && chrome.storage?.local && this.tabId) {
       try {
         chrome.storage.local.set({
-          [`ifx:tab:${this.tabId}:signals`]: this.signals.slice(0, 150),
+          [`ifx:tab:${this.tabId}:signals`]: this.signals.slice(0, 10),
         });
       } catch (_) {}
     }

@@ -11,6 +11,8 @@
  *     2. Persistência assíncrona em IndexedDB com chave primária para tolerar reloads e reinicializações.
  */
 
+import { signalStore } from "../storage/signal-store.js";
+
 export const DEFAULT_STRATEGY_VERSION = "v2.0";
 
 export class SignalDeduplicator {
@@ -65,7 +67,19 @@ export class SignalDeduplicator {
    */
   has(chave) {
     if (!chave) return false;
-    return this.sinaisEmitidos.has(chave);
+    return this.sinaisEmitidos.has(chave) || signalStore._memoryStore.has(chave);
+  }
+
+  /**
+   * Verifica de forma assíncrona garantida no IndexedDB se a chave existe (R1).
+   *
+   * @param {string} chave
+   * @returns {Promise<boolean>}
+   */
+  async hasAsync(chave) {
+    if (!chave) return false;
+    if (this.has(chave)) return true;
+    return await signalStore.hasSignal(chave);
   }
 
   /**
@@ -181,6 +195,7 @@ export class SignalDeduplicator {
    */
   async clear() {
     this.sinaisEmitidos.clear();
+    await signalStore.clear().catch(() => {});
     if (this._db) {
       return new Promise((resolve) => {
         try {

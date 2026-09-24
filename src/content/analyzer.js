@@ -26,6 +26,7 @@ import { ActiveChannel } from "../market/active-channel.js";
 import { LIFECYCLE } from "../strategy/lifecycle-config.js";
 import { signalAuditor } from "../strategy/signal-auditor.js";
 import { signalDeduplicator, DEFAULT_STRATEGY_VERSION } from "../strategy/signal-deduplicator.js";
+import { signalStore, getNextGlobalSeq } from "../storage/signal-store.js";
 import { intraminuteTracker } from "../market/intraminute-tracker.js";
 import { candleTimer } from "../utils/candle-timer.js";
 import { marketClock } from "../utils/market-clock.js";
@@ -765,7 +766,7 @@ export class MarketAnalyzer {
     this.updatePanelDisplay();
   }
 
-  processRealtimePayload(payload) {
+  async processRealtimePayload(payload) {
     if (this._isDestroyed) return;
     this._lastTickReceivedAt = Date.now();
     if (!this._firstTickAt) {
@@ -931,7 +932,7 @@ export class MarketAnalyzer {
           }
         }
         // GATILHO ÚNICO DE DECISÃO: somente com candle fechado e dataState READY/CANDLE_CLOSED
-        this._evaluateOnClosedCandle(activePair, activeTf, result.closedCandle, candle);
+        await this._evaluateOnClosedCandle(activePair, activeTf, result.closedCandle, candle);
       } else if (result.status === "DATA_GAP") {
         logger.warn("ESTADO", `Gap detectado em ${activePair}: de ${result.gapFrom} até ${result.gapTo}`);
       } else if (result.status === "UPDATED" || result.status === "INITIALIZED") {
@@ -951,7 +952,7 @@ export class MarketAnalyzer {
     this.updatePanelDisplay();
   }
 
-  _evaluateOnClosedCandle(pair, tf, closedCandle, newCandle) {
+  async _evaluateOnClosedCandle(pair, tf, closedCandle, newCandle) {
     if (this._isDestroyed) return;
 
     const qReport = this.quality.getReport(pair, tf);
@@ -973,13 +974,24 @@ export class MarketAnalyzer {
     // 2. Chave canônica de deduplicação (PRD)
     const chave = this.deduplicator.buildKey(pair, tf, closedCandle.timestamp, this.strategyVersion);
 
-    // 3. Deduplicação infalível: se já emitido para este candle, ignora
+    // 3. Deduplicação infalível: se já emitido para este candle (memória ou IndexedDB), ignora
     if (this.deduplicator.has(chave)) {
       rec("SIGNAL_SKIP", {
         chave,
         par: pair,
         ts: closedCandle.timestamp,
-        reason: "ALREADY_EMITTED",
+        reason: "ALREADY_DEDUPLICATED",
+      });
+      return;
+    }
+
+    const alreadyInStore = await signalStore.hasSignal(chave);
+    if (alreadyInStore) {
+      rec("SIGNAL_SKIP", {
+        chave,
+        par: pair,
+        ts: closedCandle.timestamp,
+        reason: "ALREADY_IN_STORE",
       });
       return;
     }
@@ -1045,36 +1057,121 @@ export class MarketAnalyzer {
         late: true,
       });
 
+      const lateSeq = await getNextGlobalSeq();
+      const lateSignal = {
+        id: chave,
+        symbol: pair,
+        timeframe: tf,
+        candleTimestamp: closedCandle.timestamp,
+        strategyVersion: this.strategyVersion,
+        action: direction,
+        reasons: decision?.reasons || [],
+        dataState,
+        latencyMs: Math.round(ageSec * 1000),
+        seq: lateSeq,
+        committed: true,
+        late: true,
+        createdAt: Date.now(),
+        tabId: this.tabId || null,
+        entryPrice: closedCandle.close,
+      };
+      await signalStore.putSignal(lateSignal).catch(() => {});
+
       logger.warn("SINAL", `Sinal tardio ignorado para alerta (+${ageSec.toFixed(1)}s): [${direction} ${pair}]`);
       return;
     }
 
-    // Registra imediatamente no deduplicador para este candle fechado não ser reprocessado
-    this.deduplicator.record(chave, {
-      action: direction,
-      probability: decision?.probability ?? null,
-      price: closedCandle.close,
-      late: false,
-    });
-
     if (isSignal) {
       decision.action = direction;
 
-      rec("SIGNAL_EMIT", {
-        chave,
-        par: pair,
-        targetTs: newCandle.timestamp,
-        hashCandles: hashCandles(closedCandles),
+      // 1. Prepara sinal com committed = false (R1, R2)
+      const seq = await getNextGlobalSeq();
+      const signalRecord = {
+        id: chave,
+        symbol: pair,
+        timeframe: tf,
+        candleTimestamp: newCandle.timestamp,
+        strategyVersion: this.strategyVersion,
         action: direction,
-        prob: decision.probability,
-        subStrategy: decision.subStrategy || decision.strategyName,
-      });
+        reasons: decision.reasons || [],
+        dataState,
+        latencyMs: Math.max(0, Date.now() - (newCandle.receivedAt || Date.now())),
+        seq,
+        committed: false,
+        createdAt: Date.now(),
+        tabId: this.tabId || null,
+        probability: decision.probability ?? null,
+        subStrategy: decision.subStrategy || decision.strategyName || null,
+        entryPrice: newCandle.open ?? closedCandle.close,
+      };
 
-      // Emite sinal diretamente para o novo candle que está iniciando
-      this.lifecycle.emitSignal(pair, tf, newCandle.timestamp, decision, newCandle.timestamp);
-      if (Number.isFinite(newCandle.open)) {
-        this.lifecycle.onCandleOpen(pair, tf, newCandle.timestamp, newCandle.open);
+      // 2. Grava no IndexedDB e AGUARDA confirmação antes de emitir (R2)
+      try {
+        rec("STORAGE_TX_START", { id: chave, seq });
+        await signalStore.putSignal(signalRecord);
+        rec("STORAGE_TX_SUCCESS", { id: chave, seq });
+
+        // Registra imediatamente no deduplicador em memória
+        this.deduplicator.record(chave, {
+          action: direction,
+          probability: decision?.probability ?? null,
+          price: closedCandle.close,
+          late: false,
+          seq,
+        });
+
+        rec("SIGNAL_EMIT", {
+          chave,
+          par: pair,
+          targetTs: newCandle.timestamp,
+          hashCandles: hashCandles(closedCandles),
+          action: direction,
+          prob: decision.probability,
+          subStrategy: decision.subStrategy || decision.strategyName,
+          seq,
+        });
+
+        // 3. SÓ AGORA EMITE O SINAL (após tx.oncomplete do IndexedDB)
+        this.lifecycle.emitSignal(pair, tf, newCandle.timestamp, decision, newCandle.timestamp);
+        if (Number.isFinite(newCandle.open)) {
+          this.lifecycle.onCandleOpen(pair, tf, newCandle.timestamp, newCandle.open);
+        }
+
+        rec("SIGNAL_EMIT_AFTER_COMMIT", {
+          chave,
+          par: pair,
+          targetTs: newCandle.timestamp,
+          action: direction,
+          seq,
+        });
+
+        // 4. Marca como committed = true no IndexedDB
+        await signalStore.markCommitted(chave);
+
+      } catch (err) {
+        rec("STORAGE_TX_FAIL", { id: chave, error: err?.message || String(err) });
+        console.error("[Analyzer] Falha ao persistir sinal em transação IndexedDB:", err);
+
+        // Fallback: salva em chrome.storage.session como pending se disponível (R6)
+        if (typeof chrome !== "undefined" && chrome.storage?.session) {
+          try {
+            const res = await chrome.storage.session.get("ifx:pending_signals");
+            const pending = Array.isArray(res?.["ifx:pending_signals"]) ? res["ifx:pending_signals"] : [];
+            pending.push(signalRecord);
+            await chrome.storage.session.set({ "ifx:pending_signals": pending });
+          } catch (_) {}
+        }
+        // Fail-safe: NÃO emite sinal se falhar a persistência
+        return;
       }
+    } else {
+      // WAIT
+      this.deduplicator.record(chave, {
+        action: "WAIT",
+        probability: decision?.probability ?? null,
+        price: closedCandle.close,
+        late: false,
+      });
     }
 
     this.quantReport = decision;

@@ -110,7 +110,7 @@ test("Flight Recorder: Bloqueio estrito de ticks intrabar (DECIDE_BLOCKED)", () 
   analyzer.destroy();
 });
 
-test("Gatilho de decisão em candle fechado: SIGNAL_EMIT e deduplicação SIGNAL_SKIP", () => {
+test("Gatilho de decisão em candle fechado: SIGNAL_EMIT e deduplicação SIGNAL_SKIP", async () => {
   const analyzer = new MarketAnalyzer();
   analyzer.activeChannel.onChannel({ action: "subscribe", pair: "EURUSD", tf: 60 });
   const t0 = 1727010000;
@@ -135,7 +135,7 @@ test("Gatilho de decisão em candle fechado: SIGNAL_EMIT e deduplicação SIGNAL
   const countEmitBefore = swGetRecords().filter((e) => e.type === "SIGNAL_EMIT").length;
 
   // Fecha candle t0 e abre t0 + 60
-  analyzer.processRealtimePayload({
+  await analyzer.processRealtimePayload({
     pair: "EURUSD",
     messages: [{ data: { time: (t0 + 60) * 1000, open: 1.0860, high: 1.0862, low: 1.0858, close: 1.0861 } }],
   });
@@ -153,7 +153,7 @@ test("Gatilho de decisão em candle fechado: SIGNAL_EMIT e deduplicação SIGNAL
   const closedCandleMock = { symbol: "EURUSD", timeframeSeconds: 60, timestamp: t0, closed: true, close: 1.0855 };
   const newCandleMock = { symbol: "EURUSD", timeframeSeconds: 60, timestamp: t0 + 60, open: 1.0860 };
 
-  analyzer._evaluateOnClosedCandle("EURUSD", 60, closedCandleMock, newCandleMock);
+  await analyzer._evaluateOnClosedCandle("EURUSD", 60, closedCandleMock, newCandleMock);
 
   const countSkipAfter = swGetRecords().filter((e) => e.type === "SIGNAL_SKIP").length;
   assert.equal(countSkipAfter, countSkipBefore + 1, "Segunda avaliação do mesmo candle deve ser ignorada via SIGNAL_SKIP");
@@ -161,7 +161,7 @@ test("Gatilho de decisão em candle fechado: SIGNAL_EMIT e deduplicação SIGNAL
   analyzer.destroy();
 });
 
-test("Imutabilidade: Sinal em IN_TRADE não sofre repainting durante ticks intrabar", () => {
+test("Imutabilidade: Sinal em IN_TRADE não sofre repainting durante ticks intrabar", async () => {
   const analyzer = new MarketAnalyzer();
   analyzer.activeChannel.onChannel({ action: "subscribe", pair: "EURUSD", tf: 60 });
   const t0 = 1727013600; // Alinhado ao minuto (múltiplo de 60s)
@@ -185,7 +185,7 @@ test("Imutabilidade: Sinal em IN_TRADE não sofre repainting durante ticks intra
   marketClock._now = () => simulatedTime;
 
   // Abre nova vela em t0 + 60 (emite sinal CALL para a vela t0 + 60)
-  analyzer.processRealtimePayload({
+  await analyzer.processRealtimePayload({
     pair: "EURUSD",
     messages: [{ data: { time: (t0 + 60) * 1000, open: 1.0860, high: 1.0861, low: 1.0859, close: 1.0860 } }],
   });
@@ -205,7 +205,7 @@ test("Imutabilidade: Sinal em IN_TRADE não sofre repainting durante ticks intra
   // Agora manda múltiplos ticks intrabar violentos na direção contrária (PUT)
   for (let s = 21; s <= 58; s++) {
     simulatedTime = (t0 + 60 + s) * 1000;
-    analyzer.processRealtimePayload({
+    await analyzer.processRealtimePayload({
       pair: "EURUSD",
       messages: [{ data: { time: (t0 + 60) * 1000 + s * 1000, open: 1.0860, high: 1.0860, low: 1.0810, close: 1.0815 } }],
     });
@@ -217,7 +217,7 @@ test("Imutabilidade: Sinal em IN_TRADE não sofre repainting durante ticks intra
 
   // No segundo 60 com vela fechada, sinal é liquidado formalmente
   simulatedTime = (t0 + 120) * 1000;
-  analyzer.processRealtimePayload({
+  await analyzer.processRealtimePayload({
     pair: "EURUSD",
     messages: [{ data: { time: (t0 + 120) * 1000, open: 1.0815, high: 1.0820, low: 1.0810, close: 1.0818 } }],
   });
@@ -230,7 +230,7 @@ test("Imutabilidade: Sinal em IN_TRADE não sofre repainting durante ticks intra
   analyzer.destroy();
 });
 
-test("Replay de voo: Zero recálculo após candle fechado", () => {
+test("Replay de voo: Zero recálculo após candle fechado", async () => {
   const analyzer = new MarketAnalyzer();
   analyzer.activeChannel.onChannel({ action: "subscribe", pair: "ARBITRIUM", tf: 60 });
   const t0 = 1727010000;
@@ -259,7 +259,7 @@ test("Replay de voo: Zero recálculo após candle fechado", () => {
 
   // Executa o replay
   for (const tick of flightTicks) {
-    analyzer.processRealtimePayload({
+    await analyzer.processRealtimePayload({
       pair: "ARBITRIUM",
       messages: [{ data: tick }],
     });

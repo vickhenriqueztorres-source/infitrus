@@ -8,6 +8,7 @@ import { selectTabView } from "../ui/tab-view-selector.js";
 import { soundsForTransition } from "../ui/sound-transitions.js";
 import { formatLifecycleCard } from "../ui/lifecycle-card.js";
 import { rec, configureFlightRecorder, generateUUID } from "../diagnostics/flight-recorder.js";
+import { signalStore } from "../storage/signal-store.js";
 
 const panelInstanceId = generateUUID();
 configureFlightRecorder({
@@ -27,6 +28,7 @@ let activeMainTab = "signal"; // 'signal' | 'quant' | 'logs'
 let activeSignalData = null;
 let lastLifecycle = null;
 let lastRenderedSeq = null;
+let lastRenderedSignalSeq = 0;
 const playedSoundSet = new Set();
 
 function sendToBoundTab(message) {
@@ -361,7 +363,7 @@ function renderQuantAnalysis(data) {
 }
 
 /**
- * Renderiza o Histórico de Sinais da aba vinculada (I-01, T-06)
+ * Renderiza o Histórico de Sinais da aba vinculada (R4, R7, I-01, T-06)
  * Cancelados aparecem riscados, com o motivo, e não contam no placar.
  */
 function renderSignalsHistory(signals = []) {
@@ -370,15 +372,44 @@ function renderSignalsHistory(signals = []) {
   if (!list) return;
 
   const rawList = Array.isArray(signals) ? signals : [];
-  if (countBadge) countBadge.textContent = `${rawList.length} señales`;
 
-  if (!rawList.length) {
+  // R4, R7: Filtragem transacional estrita
+  const validSignals = [];
+  for (const sig of rawList) {
+    if (sig.committed === false) {
+      rec("SIGNAL_SKIP_NOT_COMMITTED", { id: sig.id, seq: sig.seq });
+      continue;
+    }
+
+    if (Number.isFinite(sig.seq)) {
+      if (sig.seq < lastRenderedSignalSeq) {
+        rec("SEQ_GAP", { id: sig.id, seq: sig.seq, lastRenderedSeq: lastRenderedSignalSeq });
+        continue;
+      }
+      if (sig.seq > lastRenderedSignalSeq) {
+        lastRenderedSignalSeq = sig.seq;
+      }
+    }
+
+    validSignals.push(sig);
+  }
+
+  if (countBadge) countBadge.textContent = `${validSignals.length} señales`;
+
+  if (!validSignals.length) {
     list.innerHTML = `<p class="logs-empty">Ninguna señal liquidada aún en esta sesión.</p>`;
     return;
   }
 
+  // Compara IDs para evitar re-renderização se idêntico (R4)
+  const currentIds = validSignals.slice(0, 20).map((s) => s.id || `${s.symbol}:${s.candleTimestamp}`).join("|");
+  if (list.dataset.renderedIds === currentIds) {
+    return;
+  }
+  list.dataset.renderedIds = currentIds;
+
   list.replaceChildren();
-  rawList.slice(0, 20).forEach((sig) => {
+  validSignals.slice(0, 20).forEach((sig) => {
     const row = document.createElement("div");
     const isCancelled = sig.result === "CANCELLED" || sig.status === "CANCELLED";
     row.className = `history-row ${isCancelled ? "is-cancelled" : ""}`;
@@ -723,7 +754,7 @@ async function refreshWindowState() {
   const keysToGet = [stateKey, signalsKey, logsKey];
   if (soundKey) keysToGet.push(soundKey);
 
-  chrome.storage.local.get(keysToGet, (res) => {
+  chrome.storage.local.get(keysToGet, async (res) => {
     if (soundKey && res[soundKey] !== undefined) {
       audioAlertManager.setSoundEnabled(Boolean(res[soundKey]));
       const soundToggle = document.getElementById("sound-toggle");
@@ -731,7 +762,35 @@ async function refreshWindowState() {
     }
 
     const view = selectTabView(res, boundTabId);
-    renderState(view.state, view.signals, view.logs);
+
+    // R4: Consulta transacional de sinais no background (GET_SIGNALS) ou SignalStore
+    let dbSignals = null;
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+      try {
+        const bgRes = await new Promise((resolve) => {
+          chrome.runtime.sendMessage(
+            { type: "GET_SIGNALS", limit: 150, tabId: boundTabId },
+            (resp) => {
+              if (chrome.runtime.lastError || !resp?.ok) resolve(null);
+              else resolve(resp.signals);
+            }
+          );
+        });
+        if (Array.isArray(bgRes)) dbSignals = bgRes;
+      } catch (_) {}
+    }
+
+    if (!dbSignals) {
+      try {
+        const directSigs = await signalStore.getSignals(150, { tabId: boundTabId });
+        if (Array.isArray(directSigs) && directSigs.length > 0) {
+          dbSignals = directSigs;
+        }
+      } catch (_) {}
+    }
+
+    const activeSignals = dbSignals || view.signals || [];
+    renderState(view.state, activeSignals, view.logs);
   });
 }
 

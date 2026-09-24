@@ -74,6 +74,7 @@
         "src/strategy/*",
         "src/sidepanel/*",
         "src/offscreen/*",
+        "src/storage/*",
         "src/utils/*",
         "src/ui/*",
         "src/ui/i18n/*",
