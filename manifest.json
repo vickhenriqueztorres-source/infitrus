@@ -8,7 +8,9 @@
     "storage",
     "notifications",
     "tabs",
-    "sidePanel"
+    "sidePanel",
+    "offscreen",
+    "idle"
   ],
   "side_panel": {
     "default_path": "src/sidepanel/sidepanel.html"
@@ -71,6 +73,7 @@
         "src/indicators/*",
         "src/strategy/*",
         "src/sidepanel/*",
+        "src/offscreen/*",
         "src/utils/*",
         "src/ui/*",
         "src/ui/i18n/*",

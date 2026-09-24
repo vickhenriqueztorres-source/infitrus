@@ -18,11 +18,57 @@ function configureDockedPanel() {
 
 configureDockedPanel();
 
+let creatingOffscreenPromise = null;
+
+export async function setupOffscreenDocument() {
+  if (typeof chrome === "undefined" || !chrome.offscreen?.createDocument) return;
+  const offscreenUrl = "src/offscreen/offscreen.html";
+
+  try {
+    if (chrome.runtime?.getContexts) {
+      const existing = await chrome.runtime.getContexts({
+        contextTypes: ["OFFSCREEN_DOCUMENT"],
+      });
+      if (existing && existing.length > 0) return;
+    } else if (chrome.offscreen?.hasDocument) {
+      const hasDoc = await chrome.offscreen.hasDocument();
+      if (hasDoc) return;
+    }
+  } catch (_) {}
+
+  if (creatingOffscreenPromise) {
+    await creatingOffscreenPromise;
+    return;
+  }
+
+  creatingOffscreenPromise = (async () => {
+    try {
+      await chrome.offscreen.createDocument({
+        url: offscreenUrl,
+        reasons: ["AUDIO_PLAYBACK"],
+        justification: "Relógio de alta precisão sem throttling e áudio silencioso anti-freeze",
+      });
+      rec("OFFSCREEN_CREATED", { url: offscreenUrl });
+    } catch (err) {
+      if (!String(err).includes("single offscreen")) {
+        console.warn("[SW] Erro ao criar offscreen document:", err);
+      }
+    }
+  })();
+
+  await creatingOffscreenPromise;
+  creatingOffscreenPromise = null;
+}
+
+// Inicia imediatamente ao carregar o service worker
+setupOffscreenDocument().catch(() => {});
+
 if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
   chrome.runtime.onInstalled.addListener((details) => {
     rec("SW_BOOT", { motivo: `onInstalled_${details?.reason || "installed"}`, time: Date.now() });
     console.log("[Inflitrus] Extensión instalada.");
     configureDockedPanel();
+    setupOffscreenDocument().catch(() => {});
     try {
       chrome.storage.local.clear().catch(() => {});
     } catch (_) {}
@@ -32,6 +78,26 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
 if (typeof chrome !== "undefined" && chrome.runtime?.onStartup) {
   chrome.runtime.onStartup.addListener(() => {
     rec("SW_BOOT", { motivo: "onStartup_browser_start", time: Date.now() });
+    setupOffscreenDocument().catch(() => {});
+  });
+}
+
+// Escuta transições de estado do usuário (active, idle, locked) (R5, R7)
+if (typeof chrome !== "undefined" && chrome.idle?.onStateChanged) {
+  chrome.idle.onStateChanged.addListener((newState) => {
+    rec("IDLE_CHANGE", { state: newState });
+    if (chrome.tabs?.query) {
+      chrome.tabs.query({}).then((tabs) => {
+        for (const t of tabs) {
+          if (t.id) {
+            chrome.tabs.sendMessage(t.id, {
+              type: "ORACLE_IDLE_STATE_CHANGE",
+              state: newState,
+            }).catch(() => {});
+          }
+        }
+      }).catch(() => {});
+    }
   });
 }
 
@@ -139,6 +205,30 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
       tabId: sender?.tab?.id || null,
       windowId: sender?.tab?.windowId || null,
     });
+    return;
+  }
+
+  if (message?.type === "ENSURE_OFFSCREEN") {
+    setupOffscreenDocument().then(() => {
+      sendResponse({ ok: true });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: err?.message || String(err) });
+    });
+    return true;
+  }
+
+  if (message?.type === "OFFSCREEN_HEARTBEAT") {
+    // Retransmite heartbeat do offscreen document para abas de cálculo
+    if (typeof chrome !== "undefined" && chrome.tabs?.query) {
+      chrome.tabs.query({}).then((tabs) => {
+        for (const t of tabs) {
+          if (t.id) {
+            chrome.tabs.sendMessage(t.id, message).catch(() => {});
+          }
+        }
+      }).catch(() => {});
+    }
+    sendResponse({ ok: true });
     return;
   }
 

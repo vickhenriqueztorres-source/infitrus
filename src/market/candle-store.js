@@ -71,7 +71,13 @@ export class CandleStore {
 
     // Caso 1: Primeiro candle da série
     if (!last) {
-      list.push({ ...candle });
+      const isClosed = Boolean(candle.closed);
+      const firstCandle = {
+        ...candle,
+        closed: isClosed,
+        frozen: Boolean(candle.frozen || isClosed),
+      };
+      list.push(firstCandle);
       const result = { status: "INITIALIZED", candle: list[0] };
       this._emit(key, "initialized", result);
       return result;
@@ -79,6 +85,16 @@ export class CandleStore {
 
     // Caso 2: Mesmo timestamp -> Atualização da vela aberta existente
     if (candle.timestamp === last.timestamp) {
+      // Se a vela já estiver fechada e congelada, rejeita qualquer mutação retroativa
+      if (last.frozen || last.closed) {
+        return {
+          status: "OUT_OF_ORDER",
+          candle,
+          lastTimestamp: last.timestamp,
+          candleTimestamp: candle.timestamp,
+          frozen: true,
+        };
+      }
       last.high = Math.max(last.high, candle.high);
       last.low = Math.min(last.low, candle.low);
       last.close = candle.close;
@@ -89,6 +105,7 @@ export class CandleStore {
       // Garante que a vela aberta em atualização NUNCA seja fechada prematuramente no mesmo timestamp.
       // candle.closed só vira true quando o próximo timestamp contíguo chegar (Caso 3 ou 4).
       last.closed = false;
+      last.frozen = false;
 
       const result = { status: "UPDATED", candle: last };
       this._emit(key, "updated", result);
@@ -99,9 +116,15 @@ export class CandleStore {
     const expectedNextTimestamp = last.timestamp + candle.timeframeSeconds;
     if (candle.timestamp === expectedNextTimestamp) {
       last.closed = true;
+      last.frozen = true;
       const closedCandleCopy = { ...last };
 
-      const newCandle = { ...candle, closed: Boolean(candle.closed) };
+      const isNewClosed = Boolean(candle.closed);
+      const newCandle = {
+        ...candle,
+        closed: isNewClosed,
+        frozen: Boolean(candle.frozen || isNewClosed),
+      };
       list.push(newCandle);
 
       // Limite de memória da série
@@ -123,9 +146,15 @@ export class CandleStore {
     // Caso 4: Lacuna temporal (DATA_GAP)
     if (candle.timestamp > expectedNextTimestamp) {
       last.closed = true;
+      last.frozen = true;
       const closedCandleCopy = { ...last };
 
-      const newCandle = { ...candle, closed: Boolean(candle.closed) };
+      const isNewClosed = Boolean(candle.closed);
+      const newCandle = {
+        ...candle,
+        closed: isNewClosed,
+        frozen: Boolean(candle.frozen || isNewClosed),
+      };
       list.push(newCandle);
 
       if (list.length > this.maxCandlesPerSeries) {
@@ -144,12 +173,13 @@ export class CandleStore {
       return result;
     }
 
-    // Caso 5: Timestamp menor que o último (OUT_OF_ORDER)
+    // Caso 5: Timestamp menor que o último (OUT_OF_ORDER / BACKLOG)
     return {
       status: "OUT_OF_ORDER",
       candle,
       lastTimestamp: last.timestamp,
       candleTimestamp: candle.timestamp,
+      frozen: true,
     };
   }
 
@@ -188,6 +218,24 @@ export class CandleStore {
 
     for (let i = list.length - 1; i >= 0; i--) {
       if (list[i].closed) {
+        return { ...list[i] };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Retorna a última vela congelada (imediata e imutável).
+   * @param {string} symbol
+   * @param {number} timeframeSeconds
+   * @returns {import("./candle-normalizer.js").Candle|null}
+   */
+  getLastFrozen(symbol, timeframeSeconds) {
+    const list = this.series.get(this.getSeriesKey(symbol, timeframeSeconds));
+    if (!list || list.length === 0) return null;
+
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i].frozen || list[i].closed) {
         return { ...list[i] };
       }
     }

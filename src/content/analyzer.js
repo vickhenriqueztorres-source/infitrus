@@ -140,6 +140,39 @@ export class MarketAnalyzer {
     this._unsubChannel = null;
     this._unsubLifecycle = null;
     this._heartbeatInterval = null;
+    this._lastTimerTick = Date.now();
+    this._consecutiveSkipMs = 0;
+    this._hiddenAt = 0;
+    this._syncingBacklog = false;
+    this._backlogCount = 0;
+    this._backlogStartTs = 0;
+    this._onVisibilityChange = null;
+
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+      try {
+        chrome.runtime.sendMessage({ type: "ENSURE_OFFSCREEN" }).catch(() => {});
+      } catch (_) {}
+    }
+
+    if (typeof document !== "undefined" && document.addEventListener) {
+      this._onVisibilityChange = () => {
+        const isHidden = Boolean(document.hidden);
+        rec("VISIBILITY_CHANGE", {
+          hidden: isHidden,
+          state: isHidden ? "hidden" : "visible",
+          pair: this.currentSymbol,
+        });
+
+        if (isHidden) {
+          this._hiddenAt = Date.now();
+        } else {
+          const hiddenDuration = this._hiddenAt ? (Date.now() - this._hiddenAt) : 0;
+          this._hiddenAt = 0;
+          this.handleFocusRestored(hiddenDuration, "VISIBILITY_CHANGE");
+        }
+      };
+      document.addEventListener("visibilitychange", this._onVisibilityChange);
+    }
 
     if (typeof window !== "undefined") {
       candleTimer.start();
@@ -400,6 +433,32 @@ export class MarketAnalyzer {
 
       this._lifecycleInterval = setInterval(() => {
         if (this._isDestroyed) return;
+        const now = Date.now();
+        const elapsed = this._lastTimerTick ? (now - this._lastTimerTick) : 0;
+        this._lastTimerTick = now;
+
+        if (elapsed > 2000) {
+          this._consecutiveSkipMs += elapsed;
+          rec("TIMER_SKIP", {
+            elapsedMs: elapsed,
+            delayMs: elapsed - 250,
+            consecutiveDelayMs: this._consecutiveSkipMs,
+            par: this.currentSymbol,
+          });
+
+          if (this._consecutiveSkipMs >= 10000) {
+            rec("THROTTLED_PERIOD", {
+              durationMs: this._consecutiveSkipMs,
+              from: now - this._consecutiveSkipMs,
+              to: now,
+              par: this.currentSymbol,
+            });
+            this._consecutiveSkipMs = 0;
+          }
+        } else {
+          this._consecutiveSkipMs = 0;
+        }
+
         this.tickLifecycle();
       }, 250);
 
@@ -422,6 +481,12 @@ export class MarketAnalyzer {
           this.payout = msg.payout;
           this.registry.setGlobalPayout(msg.payout);
           this.updatePanelDisplay({ immediate: true });
+        }
+        if (msg && msg.type === "OFFSCREEN_HEARTBEAT") {
+          this.handleOffscreenHeartbeat(msg);
+        }
+        if (msg && msg.type === "ORACLE_IDLE_STATE_CHANGE") {
+          this.handleIdleStateChange(msg.state);
         }
       });
     }
@@ -479,10 +544,51 @@ export class MarketAnalyzer {
     if (this._pendingStateSaveTimeout) clearTimeout(this._pendingStateSaveTimeout);
     if (this._disconnectTimer) clearTimeout(this._disconnectTimer);
 
+    if (this._onVisibilityChange && typeof document !== "undefined" && document.removeEventListener) {
+      try {
+        document.removeEventListener("visibilitychange", this._onVisibilityChange);
+      } catch (_) {}
+      this._onVisibilityChange = null;
+    }
+
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage && this.tabId) {
       try {
         chrome.runtime.sendMessage({ type: "RELEASE_COMPUTE", tabId: this.tabId });
       } catch (_) {}
+    }
+  }
+
+  handleOffscreenHeartbeat(msg) {
+    if (this._isDestroyed) return;
+    const nowSec = msg?.nowSec || Math.floor(Date.now() / 1000);
+    this.tickLifecycle({ nowSec });
+  }
+
+  handleIdleStateChange(state) {
+    if (this._isDestroyed) return;
+    rec("IDLE_CHANGE", { state, pair: this.currentSymbol });
+    if (state === "active") {
+      this.handleFocusRestored(0, "IDLE_ACTIVE");
+    }
+  }
+
+  handleFocusRestored(hiddenDurationMs = 0, trigger = "VISIBILITY_VISIBLE") {
+    if (this._isDestroyed) return;
+    const pair = this.currentSymbol;
+    const tf = this.timeframeSeconds;
+    rec("FOCUS_RESTORED", {
+      trigger,
+      pair,
+      tf,
+      hiddenDurationMs,
+    });
+
+    if (pair) {
+      this._syncingBacklog = true;
+      this._backlogCount = 0;
+      this._backlogStartTs = Date.now();
+      this.quality.setSyncingRealtime(pair, tf, trigger);
+      this.updatePanelDisplay();
     }
   }
 
@@ -698,6 +804,19 @@ export class MarketAnalyzer {
 
       const candleSym = candle.symbol || incomingSym;
 
+      // Idempotência contra backlog de ticks (R2):
+      // Ticks com timestamp <= último candle fechado+frozen são IGNORADOS
+      const lastFrozen = this.store.getLastFrozen(candleSym, activeTf);
+      if (lastFrozen && candle.timestamp <= lastFrozen.timestamp) {
+        rec("TICK_REJECTED_BACKLOG", {
+          par: candleSym,
+          ts: candle.timestamp,
+          lastFrozenTs: lastFrozen.timestamp,
+          reason: "BELOW_OR_EQUAL_LAST_FROZEN",
+        });
+        continue;
+      }
+
       // Guarda os candles no store (por símbolo para aquecer)
       const result = this.store.ingest(candle);
 
@@ -712,6 +831,32 @@ export class MarketAnalyzer {
         l: candle.low,
         c: candle.close,
       });
+
+      if (result.status === "OUT_OF_ORDER") {
+        rec("TICK_REJECTED_BACKLOG", {
+          par: candleSym,
+          ts: candle.timestamp,
+          lastFrozenTs: lastFrozen?.timestamp ?? null,
+          reason: "OUT_OF_ORDER_STORE",
+        });
+        continue;
+      }
+
+      if (this._syncingBacklog && candleSym === activePair) {
+        this._backlogCount++;
+        const currentSec = marketClock.nowSec();
+        const candleAge = currentSec - candle.timestamp;
+        if (candleAge <= 65) {
+          const delayMs = Date.now() - this._backlogStartTs;
+          rec("BACKLOG_PROCESS", {
+            count: this._backlogCount,
+            delayMs,
+            symbol: activePair,
+          });
+          this._syncingBacklog = false;
+          this._backlogCount = 0;
+        }
+      }
 
       // Se activeChannel.get() for null, NÃO rode lifecycle nem mude currentSymbol
       if (!activePair) {
@@ -858,6 +1003,15 @@ export class MarketAnalyzer {
     const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
     this._recordEvalDuration(dur);
 
+    const candleCloseTime = closedCandle.timestamp + tf;
+    const nowWallSec = marketClock.nowSec();
+    // Se o timestamp for contemporâneo ao relógio de parede (< 24h), usa marketClock.
+    // Em replays/testes com timestamps históricos simulados, usa newCandle.timestamp.
+    const isContemporary = Math.abs(nowWallSec - (newCandle?.timestamp || candleCloseTime)) < 86400;
+    const referenceNowSec = isContemporary ? nowWallSec : (newCandle?.timestamp || candleCloseTime);
+    const ageSec = referenceNowSec - candleCloseTime;
+    const isLate = ageSec > 65;
+
     rec("DECIDE_CALL", {
       par: pair,
       targetTs: newCandle.timestamp,
@@ -866,17 +1020,41 @@ export class MarketAnalyzer {
       prob: decision?.probability,
       subStrategy: decision?.subStrategy || decision?.strategyName,
       candlesCount: closedCandles.length,
+      ageSec,
+      isLate,
     });
 
     const rawAction = decision?.action;
     const isSignal = rawAction === "CALL" || rawAction === "PUT" || rawAction === "BUY" || rawAction === "SELL";
     const direction = isSignal ? (rawAction === "BUY" ? "CALL" : rawAction === "SELL" ? "PUT" : rawAction) : "WAIT";
 
+    // Se o sinal for tardio (> 65s após fechamento da vela), salva no IndexedDB mas NÃO emite alerta (R2)
+    if (isLate) {
+      rec("SIGNAL_LATE", {
+        chave,
+        par: pair,
+        ts: closedCandle.timestamp,
+        ageSec,
+        action: direction,
+      });
+
+      this.deduplicator.record(chave, {
+        action: direction,
+        probability: decision?.probability ?? null,
+        price: closedCandle.close,
+        late: true,
+      });
+
+      logger.warn("SINAL", `Sinal tardio ignorado para alerta (+${ageSec.toFixed(1)}s): [${direction} ${pair}]`);
+      return;
+    }
+
     // Registra imediatamente no deduplicador para este candle fechado não ser reprocessado
     this.deduplicator.record(chave, {
       action: direction,
       probability: decision?.probability ?? null,
       price: closedCandle.close,
+      late: false,
     });
 
     if (isSignal) {

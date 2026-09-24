@@ -137,6 +137,17 @@ export class DataQualityTracker {
   }
 
   /**
+   * Força a transição para SYNCING_REALTIME (ex: retorno de foco ou reconexão de aba).
+   * @param {string} symbol
+   * @param {number} timeframeSeconds
+   * @param {string} [reason="Sincronizando backlog de tempo real"]
+   */
+  setSyncingRealtime(symbol, timeframeSeconds, reason = "Sincronizando backlog de tempo real") {
+    const rec = this._getOrCreateRecord(symbol, timeframeSeconds);
+    this._transitionTo(rec, MarketState.SYNCING_REALTIME, reason);
+  }
+
+  /**
    * Trata o resultado de uma ingestão em tempo real do CandleStore.
    *
    * @param {string} symbol
