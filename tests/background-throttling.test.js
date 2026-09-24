@@ -75,13 +75,13 @@ test("R1 — Fechamento de candle orientado a evento no CandleStore", () => {
   assert.ok(closedEmitted, "Deve emitir candle_closed para a vela anterior");
   assert.equal(closedEmitted.timestamp, baseTs);
   assert.equal(closedEmitted.closed, true);
-  assert.equal(closedEmitted.frozen, true);
+  assert.equal(closedEmitted.frozen, false);
 
-  // Verifica que no store a vela anterior está fechada e congelada
+  // Verifica que no store a vela anterior está fechada (e frozen=false aguardando timer R2)
   const closedCandles = store.getClosedCandles(symbol, tf, 10);
   assert.equal(closedCandles.length, 1);
   assert.equal(closedCandles[0].closed, true);
-  assert.equal(closedCandles[0].frozen, true);
+  assert.equal(closedCandles[0].frozen, false);
 
   // 4. Tentativa de mutação retroativa em vela congelada (tick atrasado com mesmo timestamp baseTs)
   const rDelayed = store.ingest({
@@ -96,16 +96,16 @@ test("R1 — Fechamento de candle orientado a evento no CandleStore", () => {
     receivedAt: 2500,
   });
   assert.equal(rDelayed.status, "OUT_OF_ORDER");
-  assert.equal(rDelayed.frozen, true);
+  assert.equal(rDelayed.frozen, false);
 
-  // Confirma que a vela congelada permaneceu imutável
+  // Confirma que a vela fechada permaneceu imutável
   const closedAfter = store.getClosedCandles(symbol, tf, 10)[0];
   assert.equal(closedAfter.high, 1.1010);
   assert.equal(closedAfter.close, 1.1008);
 });
 
-test("R2 — Simulação de 200 ticks emburacados/backlog: nenhum candle frozen é alterado", () => {
-  const store = new CandleStore();
+test("R2 — Simulação de 200 ticks emburacados/backlog: nenhum candle frozen é alterado", async () => {
+  const store = new CandleStore({ freezeDelay: 20 });
   const symbol = "BTCUSD";
   const tf = 60;
   const baseTs = 1700000000;
@@ -166,6 +166,9 @@ test("R2 — Simulação de 200 ticks emburacados/backlog: nenhum candle frozen 
 
   assert.equal(rejectedCount, 200, "Todos os 200 ticks do passado devem ser rejeitados");
 
+  // Aguarda o freezeDelay de 20ms para congelamento das velas
+  await new Promise((r) => setTimeout(r, 35));
+
   // Confirma imutabilidade estrita: nenhuma das 5 velas foi alterada
   const snapshotAfter = store.getClosedCandles(symbol, tf, 10);
   for (let i = 0; i < 5; i++) {
@@ -217,7 +220,7 @@ test("R2 — Sinais de velas fechadas há mais de 65s gravam late=true e NÃO di
     low: 99.0,
     close: 101.5,
     closed: true,
-    frozen: true,
+    frozen: false,
   };
   const newCandle = {
     symbol: pair,
@@ -272,7 +275,7 @@ test("R5 — Restauração de foco: estado SYNCING_REALTIME bloqueia sinais até
     low: 1990,
     close: 2005,
     closed: true,
-    frozen: true,
+    frozen: false,
   };
   const newCandle = {
     symbol: pair,

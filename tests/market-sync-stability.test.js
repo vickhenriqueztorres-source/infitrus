@@ -227,7 +227,8 @@ test("Service Worker: Trava CLAIM_COMPUTE rejeita segundo frame e ORACLE_SAVE_TA
       (res) => { resSaveOwner = res; }
     );
     assert.deepEqual(resSaveOwner, { saved: true });
-    assert.deepEqual(localStorage[`ifx:tab:${tabId}:state`], { symbol: "EURUSD" });
+    assert.deepEqual(sessionStorage[`ifx:session:tab:${tabId}:state`], { symbol: "EURUSD" });
+    assert.equal(localStorage[`ifx:tab:${tabId}:state`], undefined);
 
     // Frame 200 (não-proprietário) tenta gravar estado -> rejeitado com DENIED_NOT_OWNER
     let resSaveImposter = null;
@@ -237,8 +238,9 @@ test("Service Worker: Trava CLAIM_COMPUTE rejeita segundo frame e ORACLE_SAVE_TA
       (res) => { resSaveImposter = res; }
     );
     assert.deepEqual(resSaveImposter, { saved: false, reason: "DENIED_NOT_OWNER" });
-    // Estado gravado no storage local não foi adulterado pelo frame invasor
-    assert.deepEqual(localStorage[`ifx:tab:${tabId}:state`], { symbol: "EURUSD" });
+    // Estado gravado no storage de sessão não foi adulterado pelo frame invasor
+    assert.deepEqual(sessionStorage[`ifx:session:tab:${tabId}:state`], { symbol: "EURUSD" });
+    assert.equal(localStorage[`ifx:tab:${tabId}:state`], undefined);
   } finally {
     globalThis.chrome = origChrome;
   }

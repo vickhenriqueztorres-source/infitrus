@@ -39,6 +39,38 @@ function configureDockedPanel() {
 
 configureDockedPanel();
 
+if (typeof chrome !== "undefined" && chrome.storage?.session?.setAccessLevel) {
+  chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" }).catch(() => {});
+}
+
+export async function migrateLegacyStateKeys() {
+  if (typeof chrome === "undefined" || !chrome.storage?.local?.get || !chrome.storage?.session?.set) return;
+  try {
+    const localData = await new Promise((resolve) => {
+      chrome.storage.local.get(null, (res) => resolve(res || {}));
+    });
+    const keysToRemove = [];
+    const sessionUpdates = {};
+    for (const [key, value] of Object.entries(localData)) {
+      if (key.startsWith("ifx:tab:") && key.endsWith(":state")) {
+        const newKey = key.replace("ifx:tab:", "ifx:session:tab:");
+        sessionUpdates[newKey] = value;
+        keysToRemove.push(key);
+      }
+    }
+    if (Object.keys(sessionUpdates).length > 0) {
+      await new Promise((resolve) => {
+        chrome.storage.session.set(sessionUpdates, resolve);
+      });
+      if (keysToRemove.length > 0 && chrome.storage.local.remove) {
+        await new Promise((resolve) => {
+          chrome.storage.local.remove(keysToRemove, resolve);
+        });
+      }
+    }
+  } catch (_) {}
+}
+
 let creatingOffscreenPromise = null;
 
 export async function setupOffscreenDocument() {
@@ -84,6 +116,7 @@ export async function setupOffscreenDocument() {
 // Inicia imediatamente ao carregar o service worker
 setupOffscreenDocument().catch(() => {});
 flushPendingSignals().catch(() => {});
+migrateLegacyStateKeys().catch(() => {});
 
 if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
   chrome.runtime.onInstalled.addListener((details) => {
@@ -92,6 +125,7 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
     configureDockedPanel();
     setupOffscreenDocument().catch(() => {});
     flushPendingSignals().catch(() => {});
+    migrateLegacyStateKeys().catch(() => {});
     try {
       chrome.storage.local.clear().catch(() => {});
     } catch (_) {}
@@ -103,6 +137,7 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onStartup) {
     rec("SW_BOOT", { motivo: "onStartup_browser_start", time: Date.now() });
     setupOffscreenDocument().catch(() => {});
     flushPendingSignals().catch(() => {});
+    migrateLegacyStateKeys().catch(() => {});
   });
 }
 
@@ -128,10 +163,10 @@ if (typeof chrome !== "undefined" && chrome.idle?.onStateChanged) {
 // Escuta mudanças de estado por aba para atualizar badge e emitir notificações (I-06, I-07)
 if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "local") return;
+    if (areaName !== "session" && areaName !== "local") return;
 
     for (const [key, change] of Object.entries(changes)) {
-      const match = /^ifx:tab:(\d+):state$/.exec(key);
+      const match = /^(?:ifx:session:tab:|ifx:tab:)(\d+):state$/.exec(key);
       if (!match) continue;
 
       const tabId = Number(match[1]);
@@ -213,6 +248,15 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
       type: "USER_MARK",
       payload: message.payload || {},
     }, sender);
+    sendResponse({ ok: true });
+    return;
+  }
+
+  if (message?.type === "FLIGHT_RECORDER_LOG") {
+    rec(message.eventType, message.payload, {
+      tabId: message.tabId || sender?.tab?.id,
+      frameId: sender?.frameId,
+    });
     sendResponse({ ok: true });
     return;
   }
@@ -353,7 +397,7 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
     return true;
   }
 
-  // Toda escrita em ifx:tab:<tabId>:state passa pelo SW e é rejeitada se sender.frameId !== owner
+  // Toda escrita em ifx:session:tab:<tabId>:state passa pelo SW e é rejeitada se sender.frameId !== owner
   if (message?.type === "ORACLE_SAVE_TAB_STATE") {
     const tabId = sender?.tab?.id || message.tabId;
     const frameId = sender?.frameId !== undefined ? sender.frameId : (message.frameId ?? 0);
@@ -371,24 +415,26 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
         return;
       }
 
+      const sessionStateKey = `ifx:session:tab:${tabId}:state`;
       rec("SW_STORAGE_WRITE", {
-        chave: `ifx:tab:${tabId}:state`,
+        chave: sessionStateKey,
         seq: message.state?.writeSeq || null,
         tabId,
         currentPhase: message.state?.lifecycle?.current?.phase || null,
       });
 
-      if (chrome.storage?.local?.set) {
-        chrome.storage.local.set(
+      const sessionStore = chrome.storage?.session || chrome.storage?.local;
+      if (sessionStore?.set) {
+        sessionStore.set(
           {
-            [`ifx:tab:${tabId}:state`]: message.state,
+            [sessionStateKey]: message.state,
           },
           () => {
             sendResponse({ saved: true });
           }
         );
       } else {
-        sendResponse({ saved: false, reason: "NO_LOCAL_STORAGE" });
+        sendResponse({ saved: false, reason: "NO_SESSION_STORAGE" });
       }
     });
     return true;
@@ -424,6 +470,9 @@ if (typeof chrome !== "undefined" && chrome.tabs?.onAttached) {
 if (typeof chrome !== "undefined" && chrome.tabs?.onRemoved) {
   chrome.tabs.onRemoved.addListener((tabId) => {
     try {
+      if (chrome.storage?.session?.remove) {
+        chrome.storage.session.remove([`ifx:session:tab:${tabId}:state`]);
+      }
       chrome.storage.local.remove([
         `ifx:tab:${tabId}:state`,
         `ifx:tab:${tabId}:signals`,

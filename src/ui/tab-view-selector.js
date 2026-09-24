@@ -21,12 +21,14 @@ export function selectTabView(storageSnapshot = {}, boundTabId = null) {
   }
 
   const id = Number(boundTabId);
+  const sessionStateKey = `ifx:session:tab:${id}:state`;
   const stateKey = `ifx:tab:${id}:state`;
   const signalsKey = `ifx:tab:${id}:signals`;
   const logsKey = `ifx:tab:${id}:logs`;
 
-  // Lê estritamente as chaves exclusivas da aba (com suporte retroativo a tabs[id])
+  // Lê estritamente as chaves exclusivas da aba (com suporte prioritário a session e retroativo a tabs[id])
   const state =
+    storageSnapshot[sessionStateKey] ||
     storageSnapshot[stateKey] ||
     (storageSnapshot.tabs && (storageSnapshot.tabs[id] || storageSnapshot.tabs[String(boundTabId)])) ||
     null;

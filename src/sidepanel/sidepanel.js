@@ -746,22 +746,43 @@ async function refreshWindowState() {
     return;
   }
 
+  const sessionStateKey = `ifx:session:tab:${boundTabId}:state`;
   const stateKey = `ifx:tab:${boundTabId}:state`;
   const signalsKey = `ifx:tab:${boundTabId}:signals`;
   const logsKey = `ifx:tab:${boundTabId}:logs`;
   const soundKey = boundWindowId ? `ifx:window:${boundWindowId}:sound` : null;
 
-  const keysToGet = [stateKey, signalsKey, logsKey];
-  if (soundKey) keysToGet.push(soundKey);
+  const sessionStore = chrome.storage?.session;
+  const localStore = chrome.storage?.local;
 
-  chrome.storage.local.get(keysToGet, async (res) => {
-    if (soundKey && res[soundKey] !== undefined) {
-      audioAlertManager.setSoundEnabled(Boolean(res[soundKey]));
-      const soundToggle = document.getElementById("sound-toggle");
-      if (soundToggle) soundToggle.checked = Boolean(res[soundKey]);
+  const sessionPromise = new Promise((resolve) => {
+    if (sessionStore?.get) {
+      sessionStore.get([sessionStateKey], (sRes) => resolve(sRes || {}));
+    } else {
+      resolve({});
     }
+  });
 
-    const view = selectTabView(res, boundTabId);
+  const localPromise = new Promise((resolve) => {
+    const keysToGet = [stateKey, signalsKey, logsKey];
+    if (soundKey) keysToGet.push(soundKey);
+    if (localStore?.get) {
+      localStore.get(keysToGet, (lRes) => resolve(lRes || {}));
+    } else {
+      resolve({});
+    }
+  });
+
+  const [sessionRes, localRes] = await Promise.all([sessionPromise, localPromise]);
+  const res = { ...localRes, ...sessionRes };
+
+  if (soundKey && res[soundKey] !== undefined) {
+    audioAlertManager.setSoundEnabled(Boolean(res[soundKey]));
+    const soundToggle = document.getElementById("sound-toggle");
+    if (soundToggle) soundToggle.checked = Boolean(res[soundKey]);
+  }
+
+  const view = selectTabView(res, boundTabId);
 
     // R4: Consulta transacional de sinais no background (GET_SIGNALS) ou SignalStore
     let dbSignals = null;
@@ -791,7 +812,6 @@ async function refreshWindowState() {
 
     const activeSignals = dbSignals || view.signals || [];
     renderState(view.state, activeSignals, view.logs);
-  });
 }
 
 async function initSidepanel() {
@@ -947,10 +967,10 @@ async function initSidepanel() {
 
   // 6. Observador de mudanças no Storage estritamente isolado para a aba vinculada
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local" || !boundTabId) return;
+    if ((area !== "local" && area !== "session") || !boundTabId) return;
 
     for (const [key, change] of Object.entries(changes)) {
-      if (key.startsWith(`ifx:tab:${boundTabId}:`)) {
+      if (key === `ifx:session:tab:${boundTabId}:state` || key.startsWith(`ifx:tab:${boundTabId}:`)) {
         const seqRecebido = change.newValue?.writeSeq ?? null;
         const oldPhase = change.oldValue?.lifecycle?.trade?.phase || change.oldValue?.lifecycle?.current?.phase || null;
         const newPhase = change.newValue?.lifecycle?.trade?.phase || change.newValue?.lifecycle?.current?.phase || null;
@@ -965,7 +985,10 @@ async function initSidepanel() {
     }
 
     const tabPrefix = `ifx:tab:${boundTabId}:`;
-    const relevant = Object.keys(changes).some((k) => k.startsWith(tabPrefix) || k === winSoundKey);
+    const sessionPrefix = `ifx:session:tab:${boundTabId}:`;
+    const relevant = Object.keys(changes).some(
+      (k) => k.startsWith(tabPrefix) || k.startsWith(sessionPrefix) || k === winSoundKey
+    );
     if (relevant) {
       refreshWindowState();
     }

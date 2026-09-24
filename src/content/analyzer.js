@@ -959,14 +959,37 @@ export class MarketAnalyzer {
     const isReady = this.store.isReady(pair, tf);
     const dataState = (isReady && qReport.state === MarketState.READY) ? "READY" : (qReport.state || "NOT_READY");
 
-    // 1. Guarda: candle fechado e dataState READY ou CANDLE_CLOSED
-    if (!closedCandle?.closed || !["READY", "CANDLE_CLOSED"].includes(dataState)) {
+    // 1. Guarda: candle deve existir e estar fechado
+    if (!closedCandle?.closed) {
       rec("DECIDE_BLOCKED", {
         par: pair,
         ts: closedCandle?.timestamp ?? null,
-        closed: Boolean(closedCandle?.closed),
+        closed: false,
         dataState,
-        reason: !closedCandle?.closed ? "CANDLE_NOT_CLOSED" : `INVALID_DATA_STATE_${dataState}`,
+        reason: "CANDLE_NOT_CLOSED",
+      });
+      return;
+    }
+
+    // 1b. Guarda R3: candle já congelado bloqueia avaliação (evita repinte tardio)
+    if (closedCandle?.frozen === true) {
+      this._logFlight("EVALUATE_BLOCKED_FROZEN", {
+        pair,
+        tf,
+        candleTimestamp: closedCandle.timestamp,
+        reason: "CANDLE_JA_CONGELADO",
+      });
+      return;
+    }
+
+    // 1c. Guarda: dataState READY ou CANDLE_CLOSED
+    if (!["READY", "CANDLE_CLOSED"].includes(dataState)) {
+      rec("DECIDE_BLOCKED", {
+        par: pair,
+        ts: closedCandle.timestamp,
+        closed: true,
+        dataState,
+        reason: `INVALID_DATA_STATE_${dataState}`,
       });
       return;
     }
@@ -1016,17 +1039,22 @@ export class MarketAnalyzer {
     this._recordEvalDuration(dur);
 
     const candleCloseTime = closedCandle.timestamp + tf;
+    const targetCandle = newCandle || {
+      timestamp: candleCloseTime,
+      open: closedCandle.close,
+      receivedAt: Date.now(),
+    };
     const nowWallSec = marketClock.nowSec();
     // Se o timestamp for contemporâneo ao relógio de parede (< 24h), usa marketClock.
-    // Em replays/testes com timestamps históricos simulados, usa newCandle.timestamp.
-    const isContemporary = Math.abs(nowWallSec - (newCandle?.timestamp || candleCloseTime)) < 86400;
-    const referenceNowSec = isContemporary ? nowWallSec : (newCandle?.timestamp || candleCloseTime);
+    // Em replays/testes com timestamps históricos simulados, usa targetCandle.timestamp.
+    const isContemporary = Math.abs(nowWallSec - targetCandle.timestamp) < 86400;
+    const referenceNowSec = isContemporary ? nowWallSec : targetCandle.timestamp;
     const ageSec = referenceNowSec - candleCloseTime;
     const isLate = ageSec > 65;
 
     rec("DECIDE_CALL", {
       par: pair,
-      targetTs: newCandle.timestamp,
+      targetTs: targetCandle.timestamp,
       hashCandles: hashCandles(closedCandles),
       action: decision?.action,
       prob: decision?.probability,
@@ -1090,19 +1118,19 @@ export class MarketAnalyzer {
         id: chave,
         symbol: pair,
         timeframe: tf,
-        candleTimestamp: newCandle.timestamp,
+        candleTimestamp: targetCandle.timestamp,
         strategyVersion: this.strategyVersion,
         action: direction,
         reasons: decision.reasons || [],
         dataState,
-        latencyMs: Math.max(0, Date.now() - (newCandle.receivedAt || Date.now())),
+        latencyMs: Math.max(0, Date.now() - (targetCandle.receivedAt || Date.now())),
         seq,
         committed: false,
         createdAt: Date.now(),
         tabId: this.tabId || null,
         probability: decision.probability ?? null,
         subStrategy: decision.subStrategy || decision.strategyName || null,
-        entryPrice: newCandle.open ?? closedCandle.close,
+        entryPrice: targetCandle.open ?? closedCandle.close,
       };
 
       // 2. Grava no IndexedDB e AGUARDA confirmação antes de emitir (R2)
@@ -1123,7 +1151,7 @@ export class MarketAnalyzer {
         rec("SIGNAL_EMIT", {
           chave,
           par: pair,
-          targetTs: newCandle.timestamp,
+          targetTs: targetCandle.timestamp,
           hashCandles: hashCandles(closedCandles),
           action: direction,
           prob: decision.probability,
@@ -1132,15 +1160,15 @@ export class MarketAnalyzer {
         });
 
         // 3. SÓ AGORA EMITE O SINAL (após tx.oncomplete do IndexedDB)
-        this.lifecycle.emitSignal(pair, tf, newCandle.timestamp, decision, newCandle.timestamp);
-        if (Number.isFinite(newCandle.open)) {
-          this.lifecycle.onCandleOpen(pair, tf, newCandle.timestamp, newCandle.open);
+        this.lifecycle.emitSignal(pair, tf, targetCandle.timestamp, decision, targetCandle.timestamp);
+        if (Number.isFinite(targetCandle.open)) {
+          this.lifecycle.onCandleOpen(pair, tf, targetCandle.timestamp, targetCandle.open);
         }
 
         rec("SIGNAL_EMIT_AFTER_COMMIT", {
           chave,
           par: pair,
-          targetTs: newCandle.timestamp,
+          targetTs: targetCandle.timestamp,
           action: direction,
           seq,
         });
@@ -1397,6 +1425,10 @@ export class MarketAnalyzer {
     this.saveMarketStateToStorage(stateObj, { immediate });
   }
 
+  _saveTabState(immediate = false) {
+    this.updatePanelDisplay(immediate);
+  }
+
   saveMarketStateToStorage(stateObj, { immediate = false } = {}) {
     if (this._isDestroyed) return;
     if (typeof chrome === "undefined" || !this.tabId) return;
@@ -1435,8 +1467,9 @@ export class MarketAnalyzer {
     this._writeSeq = (this._writeSeq || 0) + 1;
     payload.writeSeq = this._writeSeq;
     const payloadSize = typeof JSON !== "undefined" ? JSON.stringify(payload).length : 0;
-    rec("STATE_WRITE", {
-      chave: `ifx:tab:${this.tabId}:state`,
+    const sessionStateKey = `ifx:session:tab:${this.tabId}:state`;
+    this._logFlight("STATE_WRITE", {
+      chave: sessionStateKey,
       writeSeq: this._writeSeq,
       resumo: {
         current: payload?.lifecycle?.current ? {
@@ -1474,12 +1507,36 @@ export class MarketAnalyzer {
           }
         );
       } catch (_) {}
-    } else if (chrome.storage?.local?.set) {
+    } else {
+      const sessionStore = chrome.storage?.session || chrome.storage?.local;
+      if (sessionStore?.set) {
+        try {
+          sessionStore.set({
+            [sessionStateKey]: payload,
+          });
+          this._storageWritesCount++;
+        } catch (_) {}
+      }
+    }
+  }
+
+  /**
+   * Registra log no flight recorder unificado.
+   * @param {string} eventType
+   * @param {Object} payload
+   */
+  _logFlight(eventType, payload) {
+    if (typeof rec === "function") {
+      rec(eventType, payload, { tabId: this.tabId });
+    }
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
       try {
-        chrome.storage.local.set({
-          [`ifx:tab:${this.tabId}:state`]: payload,
-        });
-        this._storageWritesCount++;
+        chrome.runtime.sendMessage({
+          type: "FLIGHT_RECORDER_LOG",
+          eventType,
+          payload,
+          tabId: this.tabId,
+        }).catch(() => {});
       } catch (_) {}
     }
   }

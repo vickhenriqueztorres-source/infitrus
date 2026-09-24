@@ -9,9 +9,20 @@ let boundTabId = null;
 let boundWindowId = null;
 
 function getStorage(keys) {
-  return new Promise((resolve) => {
-    if (!globalThis.chrome?.storage?.local) return resolve({});
-    chrome.storage.local.get(keys, (result) => resolve(result || {}));
+  return new Promise(async (resolve) => {
+    let sessionData = {};
+    let localData = {};
+    try {
+      if (globalThis.chrome?.storage?.session?.get) {
+        sessionData = await new Promise((r) => chrome.storage.session.get(keys, (res) => r(res || {})));
+      }
+    } catch (_) {}
+    try {
+      if (globalThis.chrome?.storage?.local?.get) {
+        localData = await new Promise((r) => chrome.storage.local.get(keys, (res) => r(res || {})));
+      }
+    } catch (_) {}
+    resolve({ ...localData, ...sessionData });
   });
 }
 
@@ -65,9 +76,10 @@ function renderState(data = {}) {
 
 async function refreshPopupState() {
   if (!boundTabId) return;
+  const sessionStateKey = `ifx:session:tab:${boundTabId}:state`;
   const stateKey = `ifx:tab:${boundTabId}:state`;
   const soundKey = boundWindowId ? `ifx:window:${boundWindowId}:sound` : null;
-  const keys = [stateKey, ACTIVE_KEY, NOTIFICATIONS_KEY];
+  const keys = [sessionStateKey, stateKey, ACTIVE_KEY, NOTIFICATIONS_KEY];
   if (soundKey) keys.push(soundKey);
 
   const stored = await getStorage(keys);
@@ -132,10 +144,11 @@ async function initialize() {
 
   if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local" || !boundTabId) return;
+      if ((area !== "local" && area !== "session") || !boundTabId) return;
+      const sessionStateKey = `ifx:session:tab:${boundTabId}:state`;
       const tabStateKey = `ifx:tab:${boundTabId}:state`;
-      if (changes[tabStateKey]?.newValue) {
-        renderState(changes[tabStateKey].newValue);
+      if (changes[sessionStateKey]?.newValue || changes[tabStateKey]?.newValue) {
+        renderState(changes[sessionStateKey]?.newValue || changes[tabStateKey]?.newValue);
       }
     });
   }
