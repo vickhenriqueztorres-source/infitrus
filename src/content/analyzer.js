@@ -875,42 +875,56 @@ export class MarketAnalyzer {
     }
 
     let mainSnapshot = null;
+    const formingTs = Math.floor(currentNowSec / tf) * tf;
+    const targetTs = formingTs + tf;
+    const secInCandle = Math.floor(currentNowSec % 60);
 
-    for (const pair of symbolsToStep) {
-      if (tf !== LIFECYCLE.SUPPORTED_TF_SEC) {
-        continue;
-      }
+    if (!this._lastSignalTargetTsBySymbol) this._lastSignalTargetTsBySymbol = new Map();
+    if (!this._lastEmittedDirectionBySymbol) this._lastEmittedDirectionBySymbol = new Map();
+    if (!this._lastEmittedTsBySymbol) this._lastEmittedTsBySymbol = new Map();
 
-      let currentDataOk = dataOk;
-      if (currentDataOk === null) {
-        const report = this.quality.getReport(pair, tf);
-        const isReady = this.store.isReady(pair, tf);
-        currentDataOk = isReady && report.state === MarketState.READY;
-      }
+    // GOVERNADOR DE PORTFÓLIO MULTI-ATIVO:
+    // Na janela de decisão (45s a 57s), avalia os ativos elegíveis e elege o melhor candidato único
+    let winningPair = null;
+    let winningDecision = null;
 
-      const prevPhase = (pair === this.currentSymbol && this.currentLifecycleSnapshot)
-        ? (this.currentLifecycleSnapshot?.trade?.phase || this.currentLifecycleSnapshot?.current?.phase || "SCANNING")
-        : "SCANNING";
+    if (decide === null && tf === LIFECYCLE.SUPPORTED_TF_SEC &&
+        secInCandle >= (this.lifecycle?.cfg?.DECISION_START_SEC ?? 45) &&
+        secInCandle <= (this.lifecycle?.cfg?.DECISION_END_SEC ?? 57)) {
 
-      const decideFn = decide ?? (() => {
-        const secInCandle = Math.floor(currentNowSec % 60);
-        // Avalia apenas dentro da janela de decisão (45s a 57s)
-        if (secInCandle < (this.lifecycle?.cfg?.DECISION_START_SEC ?? 45) ||
-            secInCandle > (this.lifecycle?.cfg?.DECISION_END_SEC ?? 57)) {
-          return null;
+      const evaluatedCandidates = [];
+
+      for (const pair of symbolsToStep) {
+        // 1. Bloqueio de trade em andamento na vela formadora
+        const currentSnap = this.lifecycle?.snapshot ? this.lifecycle.snapshot(pair, tf, currentNowSec) : null;
+        if (currentSnap?.trade && (currentSnap.trade.phase === "IN_TRADE" || currentSnap.trade.phase === "ENTRY_NOW")) {
+          continue;
         }
 
+        // 2. Cooldown obrigatório por ativo (mínimo de 2 velas entre sinais no mesmo par)
+        const lastTargetTs = this._lastSignalTargetTsBySymbol.get(pair) || 0;
+        if (formingTs < lastTargetTs + 2 * tf) {
+          continue;
+        }
+
+        let currentDataOk = dataOk;
+        if (currentDataOk === null) {
+          const report = this.quality.getReport(pair, tf);
+          const isReady = this.store.isReady(pair, tf);
+          currentDataOk = isReady && report.state === MarketState.READY;
+        }
+        if (!currentDataOk) continue;
+
         const candles = this.store.getCandles(pair, tf, 150);
-        if (!candles || candles.length < 15) return null;
+        if (!candles || candles.length < 15) continue;
+
+        const strat = this.registry.get(pair);
+        if (!strat || typeof strat.evaluate !== "function") continue;
 
         const microMetrics = this.intraminuteTracker ? this.intraminuteTracker.getCurrentMetrics(pair, tf) : null;
         const report = this.quality ? this.quality.getReport(pair, tf) : { state: MarketState.READY };
         const isReady = this.store.isReady(pair, tf);
         const dataState = (isReady && report.state === MarketState.READY) ? "READY" : (report.state || "NOT_READY");
-        if (!["READY", "CANDLE_CLOSED"].includes(dataState)) return null;
-
-        const strat = this.registry.get(pair);
-        if (!strat || typeof strat.evaluate !== "function") return null;
 
         const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
         const decision = strat.evaluate({
@@ -934,7 +948,6 @@ export class MarketAnalyzer {
             this.lastCachedDecision = normalizedDecision;
           }
 
-          // Se a decisão não for acionável (SHADOW, falta de confluência ou conflito), NÃO emite PRE_SIGNAL!
           if (decision.isActionable === false || decision.action === "WAIT") {
             rec("DECISION_NOT_ACTIONABLE", {
               pair,
@@ -943,28 +956,64 @@ export class MarketAnalyzer {
               reasons: decision.reasons,
               isActionable: decision.isActionable,
             });
-            return null;
+            continue;
           }
 
-          // Filtro Anti-Flip na virada consecutiva de vela:
-          // Se na vela anterior foi emitido sinal na direção oposta (delta <= 120s),
-          // exige CONFLUÊNCIA comprovada (2+ famílias) para permitir a virada rápida.
-          if (!this._lastEmittedDirectionBySymbol) this._lastEmittedDirectionBySymbol = new Map();
-          if (!this._lastEmittedTsBySymbol) this._lastEmittedTsBySymbol = new Map();
+          // Filtro Anti-Flip na virada consecutiva de vela
           const lastOpposite = this._lastEmittedDirectionBySymbol.get(pair);
           const lastOppositeTs = this._lastEmittedTsBySymbol.get(pair) || 0;
           if (lastOpposite && lastOpposite !== action && (currentNowSec - lastOppositeTs <= 120)) {
             if (!decision.isConfluence && (decision.confluentCount || 0) < 2) {
               rec("REVERSAL_VETO_UNCONFIRMED", { pair, action, prevAction: lastOpposite, deltaTs: currentNowSec - lastOppositeTs });
               logger.info("SINAL", `⚠️ Inversão imediata de [${lastOpposite} ➔ ${action}] em ${pair} vetada: exige confluência de 2+ famílias independentes.`);
-              return null;
+              continue;
             }
           }
 
-          this._lastEmittedDirectionBySymbol.set(pair, action);
-          this._lastEmittedTsBySymbol.set(pair, currentNowSec);
+          const score = Number(((decision.adjustedEdge || 0) * (decision.quality || 0.6) * Math.max(1, decision.confluentCount || 1)).toFixed(5));
+          evaluatedCandidates.push({ pair, action, decision: normalizedDecision, score });
+        }
+      }
 
-          return normalizedDecision;
+      if (evaluatedCandidates.length > 0) {
+        evaluatedCandidates.sort((a, b) => b.score - a.score);
+        winningPair = evaluatedCandidates[0].pair;
+        winningDecision = evaluatedCandidates[0].decision;
+
+        if (evaluatedCandidates.length > 1) {
+          const others = evaluatedCandidates.slice(1).map(c => `${c.pair} (${c.action})`).join(", ");
+          logger.info("PORTFOLIO", `🛡️ Governador selecionou [${winningPair} - ${winningDecision.action}] (Score: ${evaluatedCandidates[0].score}). Ativos suprimidos para evitar sobreposição: ${others}`);
+          rec("GOVERNOR_ASSETS_SUPPRESSED", {
+            winner: winningPair,
+            targetTs,
+            suppressed: evaluatedCandidates.slice(1).map(c => ({ pair: c.pair, action: c.action, score: c.score })),
+          });
+        }
+      }
+    }
+
+    for (const pair of symbolsToStep) {
+      if (tf !== LIFECYCLE.SUPPORTED_TF_SEC) {
+        continue;
+      }
+
+      let currentDataOk = dataOk;
+      if (currentDataOk === null) {
+        const report = this.quality.getReport(pair, tf);
+        const isReady = this.store.isReady(pair, tf);
+        currentDataOk = isReady && report.state === MarketState.READY;
+      }
+
+      const prevPhase = (pair === this.currentSymbol && this.currentLifecycleSnapshot)
+        ? (this.currentLifecycleSnapshot?.trade?.phase || this.currentLifecycleSnapshot?.current?.phase || "SCANNING")
+        : "SCANNING";
+
+      const decideFn = decide ?? (() => {
+        if (pair === winningPair && winningDecision) {
+          this._lastSignalTargetTsBySymbol.set(pair, targetTs);
+          this._lastEmittedDirectionBySymbol.set(pair, winningDecision.action);
+          this._lastEmittedTsBySymbol.set(pair, currentNowSec);
+          return winningDecision;
         }
         return null;
       });

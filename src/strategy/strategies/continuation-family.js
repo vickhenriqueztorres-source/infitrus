@@ -101,7 +101,12 @@ export class ContinuationFamily {
         bearEv.pressure = pressure;
       }
 
-      const impulseDir = bullScore >= 0.50 && bullScore > bearScore ? "CALL" : bearScore >= 0.50 ? "PUT" : null;
+      // Exige score robusto (>= 0.60) e eficiência direcional real (>= 0.55) para evitar falso impulso
+      const impulseDir = (bullScore >= 0.60 && dirEfficiency >= 0.55 && bullScore > bearScore)
+        ? "CALL"
+        : (bearScore >= 0.60 && dirEfficiency >= 0.55)
+        ? "PUT"
+        : null;
       if (impulseDir) {
         const score = impulseDir === "CALL" ? bullScore : bearScore;
         const rawProb = Number(clamp(0.50 + score * 0.20, 0.50, 0.72).toFixed(4));

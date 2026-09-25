@@ -122,8 +122,8 @@ export class AdaptiveKnnEngine {
     const effectiveN = sumWeightSq > 0 ? (sumWeight * sumWeight) / sumWeightSq : 0;
     const meanDistance = topK.length > 0 ? sumDist / topK.length : 0;
 
-    // Moderação Bayesiana suave para evitar extremos espúrios
-    const m = 3.0;
+    // Moderação Bayesiana robusta (Laplace/m-estimate) para contrair amostras pequenas em direção a 50%
+    const m = 6.0;
     const smoothedProbUp = (rawProbUp * effectiveN + 0.50 * m) / (effectiveN + m);
 
     const probUp = Number(clamp(smoothedProbUp, 0.20, 0.80).toFixed(4));

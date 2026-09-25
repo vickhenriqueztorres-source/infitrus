@@ -41,7 +41,7 @@ import { EdgeSelector } from "./decision/edge-selector.js";
 export class QuantPortfolio {
   constructor(config = {}) {
     this.payout = config.payout || DEFAULT_PAYOUT;
-    this.minEdge = config.minEdge !== undefined ? config.minEdge : 0.015;
+    this.minEdge = config.minEdge !== undefined ? config.minEdge : 0.025;
 
     // Componentes de extração contínua e regime
     this.featureBuilder = new FeatureVectorBuilder();
@@ -64,14 +64,15 @@ export class QuantPortfolio {
     // Pool de Oportunidades (Validador, Calibrador e Agrupador)
     this.opportunityPool = new OpportunityPool({
       minEdge: this.minEdge,
-      minQuality: config.minQuality || 0.50,
+      minQuality: config.minQuality || 0.60,
     });
 
     // Tomador de Decisão Competitiva
     this.edgeSelector = new EdgeSelector({
       minEdge: this.minEdge,
-      minQuality: config.minQuality || 0.50,
-      conflictThreshold: config.conflictThreshold || 0.010,
+      minQuality: config.minQuality || 0.65,
+      conflictThreshold: config.conflictThreshold || 0.030,
+      requireConfluence: true,
     });
   }
 

@@ -105,19 +105,19 @@ export class MicrostructureFamily {
       let accelDir = null;
       let accelScore = 0;
 
-      // Detecta fluxo crescendo de forma acelerada
+      // Detecta fluxo crescendo de forma acelerada com força dinâmica expressiva
       const dynamicForceBull = pressureVelocity * 1.6 + pressureAcceleration * 1.0;
       const dynamicForceBear = -pressureVelocity * 1.6 - pressureAcceleration * 1.0;
 
-      if (dynamicForceBull >= 0.18) {
+      if (dynamicForceBull >= 0.28 && tickCount >= 10) {
         accelDir = "CALL";
-        accelScore = 0.35 + clamp(dynamicForceBull * 1.5, 0.15, 0.55);
-      } else if (dynamicForceBear >= 0.18) {
+        accelScore = 0.35 + clamp(dynamicForceBull * 1.4, 0.15, 0.55);
+      } else if (dynamicForceBear >= 0.28 && tickCount >= 10) {
         accelDir = "PUT";
-        accelScore = 0.35 + clamp(dynamicForceBear * 1.5, 0.15, 0.55);
+        accelScore = 0.35 + clamp(dynamicForceBear * 1.4, 0.15, 0.55);
       }
 
-      if (accelDir && accelScore >= 0.52) {
+      if (accelDir && accelScore >= 0.58) {
         const rawProb = Number(clamp(0.50 + accelScore * 0.21, 0.50, 0.72).toFixed(4));
         const uncert = Number(clamp(0.045 - accelScore * 0.015, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));

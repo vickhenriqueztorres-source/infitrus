@@ -22,8 +22,8 @@ import { clamp } from "../detectors/detector-types.js";
 export class EdgeSelector {
   constructor(config = {}) {
     this.minEdge = config.minEdge !== undefined ? config.minEdge : 0.025; // Mínimo +2.5% de vantagem sobre breakeven
-    this.minQuality = config.minQuality !== undefined ? config.minQuality : 0.60;
-    this.conflictThreshold = config.conflictThreshold !== undefined ? config.conflictThreshold : 0.025; // 2.5 p.p. de desempate
+    this.minQuality = config.minQuality !== undefined ? config.minQuality : 0.65;
+    this.conflictThreshold = config.conflictThreshold !== undefined ? config.conflictThreshold : 0.030; // 3.0 p.p. de desempate
     this.requireConfluence = config.requireConfluence !== undefined ? config.requireConfluence : true;
   }
 
@@ -221,23 +221,32 @@ export class EdgeSelector {
       );
     }
 
-    // 5.1 Política de Maturidade e Seletividade Acionável (Etapa 7):
+    // 5.1 Política de Maturidade e Seletividade Acionável:
     const isShadow = winner.maturity === "SHADOW";
     const sameDirectionActive = sameDirectionCandidates.some((c) => c.maturity && c.maturity !== "SHADOW");
 
-    // Um sinal só é ACIONÁVEL para entrada no mercado se:
-    // 1. Tiver CONFLUÊNCIA de 2+ famílias independentes (com ao menos 1 ACTIVE/LEARNING);
-    // OU
-    // 2. Tiver ALTA CONVICÇÃO unânime de estratégia ACTIVE (adjustedEdge >= 0.035, quality >= 0.68) e ZERO concorrente contrário.
+    // Regra Institucional Estrita:
+    // Um sinal só é ACIONÁVEL para entrada no mercado se contar com CONFLUÊNCIA de 2+ famílias independentes
+    // (com ao menos 1 ACTIVE/LEARNING). Sinais isolados NUNCA operam sozinhos no mercado real.
     const hasConfluence = isConfluence && sameDirectionActive;
-    const hasHighSingleConviction = !isShadow && winner.adjustedEdge >= 0.035 && winner.quality >= 0.68 && (!oppositeCandidates || oppositeCandidates.length === 0);
 
-    const isActionable = hasConfluence || hasHighSingleConviction;
+    // Desconto de multicolinearidade: se as únicas 2 famílias em acordo forem MOMENTUM e MICROSTRUCTURE
+    // (que naturalmente se movem juntas na mesma vela), exige edge somado mais rigoroso (>= 5.0%)
+    let passesCollinearityCheck = true;
+    if (orthogonalGroups.size === 2 && orthogonalGroups.has("MOMENTUM") && orthogonalGroups.has("MICROSTRUCTURE")) {
+      const combinedEdge = sameDirectionCandidates.reduce((acc, c) => acc + (c.edge || 0), 0);
+      if (combinedEdge < 0.050) {
+        passesCollinearityCheck = false;
+        reasons.unshift(`Confluência Momentum+Microestrutura insuficiente (Edge somado +${(combinedEdge * 100).toFixed(1)}% < +5.0%): aguardando confirmação estrutural`);
+      }
+    }
+
+    const isActionable = hasConfluence && passesCollinearityCheck;
 
     if (!isActionable) {
       if (isShadow && !sameDirectionActive) {
         reasons.unshift(`Oportunidade em SHADOW (${winner.subStrategy || winner.name}): observação analítica sem alerta acionável`);
-      } else {
+      } else if (!hasConfluence) {
         reasons.unshift(`Sinal isolado sem confluência inter-famílias (${orthogonalGroups.size}/2 famílias necessárias): aguardando confirmação`);
       }
     }

@@ -23,8 +23,8 @@ export class HistoricalAnalogyFamily {
 
     // Motores especializados com diferentes parametrizações
     this.exactKnn = new AdaptiveKnnEngine({
-      kNeighbors: 5,
-      tauDistance: 1.2,
+      kNeighbors: 12,
+      tauDistance: 1.5,
       lambdaAge: 0.005,
       maxHistory: 200,
     });
@@ -37,9 +37,9 @@ export class HistoricalAnalogyFamily {
     });
 
     this.recentKnn = new AdaptiveKnnEngine({
-      kNeighbors: 12,
+      kNeighbors: 15,
       tauDistance: 2.2,
-      lambdaAge: 0.040, // Forte decaimento temporal
+      lambdaAge: 0.035, // Forte decaimento temporal
       maxHistory: 150,
     });
 
@@ -90,11 +90,11 @@ export class HistoricalAnalogyFamily {
     }
 
     // =========================================================================
-    // 5A — EXACT LOCAL ANALOGY (KNN k=5, Distância Estrita)
+    // 5A — EXACT LOCAL ANALOGY (KNN k=12, Distância Estrita)
     // =========================================================================
     {
       const res = this.exactKnn.evaluate({ currentVector: vec, candles });
-      if (res.effectiveN >= 3.0 && res.meanDistance < 1.8) {
+      if (res.effectiveN >= 5.0 && res.meanDistance < 1.5) {
         let dir = null;
         let pVal = 0.50;
         if (res.probUp >= 0.65) {

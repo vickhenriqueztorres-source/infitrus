@@ -79,15 +79,15 @@ test("Selectivity: Estratégia sem confluência e sem alta convicção marca isA
   const selector = new EdgeSelector();
   const payout = 0.85;
 
-  // Candidato isolado com edge modesto e qualidade moderada
+  // Candidato isolado com edge e qualidade suficientes, mas sem confluência inter-famílias
   const candidateIsolated = {
     action: "CALL",
-    subStrategy: "WEAK_SIGNAL",
+    subStrategy: "SOLITARY_SIGNAL",
     correlationGroup: "continuation",
-    edge: 0.026,
-    adjustedEdge: 0.026,
-    quality: 0.62,
-    confidence: 0.55,
+    edge: 0.035,
+    adjustedEdge: 0.035,
+    quality: 0.70,
+    confidence: 0.70,
     maturity: "ACTIVE",
   };
 
@@ -97,7 +97,7 @@ test("Selectivity: Estratégia sem confluência e sem alta convicção marca isA
   });
 
   assert.equal(decision.action, "CALL");
-  assert.equal(decision.isActionable, false, "Sinal isolado sem confluência e sem alta convicção não deve ser acionável");
+  assert.equal(decision.isActionable, false, "Sinal isolado sem confluência NUNCA deve ser acionável");
 });
 
 test("Selectivity: Confluência de 2 famílias independentes torna o sinal acionável", () => {
@@ -115,14 +115,48 @@ test("Selectivity: Confluência de 2 famílias independentes torna o sinal acion
     maturity: "ACTIVE",
   };
 
-  const candidateMicro = {
+  const candidateAnalogy = {
     action: "CALL",
-    subStrategy: "PRESSURE_IMBALANCE",
-    correlationGroup: "microstructure",
+    subStrategy: "EXACT_LOCAL_ANALOGY",
+    correlationGroup: "analogy",
     edge: 0.030,
     adjustedEdge: 0.030,
     quality: 0.72,
     confidence: 0.70,
+    maturity: "ACTIVE",
+  };
+
+  const decision = selector.selectCompetitive({
+    candidates: [candidateMom, candidateAnalogy],
+    payout,
+  });
+
+  assert.equal(decision.action, "CALL");
+  assert.equal(decision.isConfluence, true);
+  assert.equal(decision.isActionable, true, "Confluência de 2 famílias independentes deve ser acionável");
+});
+
+test("Selectivity: Confluência colinear Momentum+Microestrutura com edge fraco (<5%) não é acionável", () => {
+  const selector = new EdgeSelector();
+  const payout = 0.85;
+
+  const candidateMom = {
+    action: "CALL",
+    subStrategy: "IMPULSE_CONTINUATION",
+    correlationGroup: "MOMENTUM",
+    edge: 0.025,
+    adjustedEdge: 0.025,
+    quality: 0.70,
+    maturity: "ACTIVE",
+  };
+
+  const candidateMicro = {
+    action: "CALL",
+    subStrategy: "PRESSURE_ACCELERATION",
+    correlationGroup: "MICROSTRUCTURE",
+    edge: 0.020, // Soma = 0.045 < 0.050
+    adjustedEdge: 0.020,
+    quality: 0.70,
     maturity: "ACTIVE",
   };
 
@@ -132,6 +166,5 @@ test("Selectivity: Confluência de 2 famílias independentes torna o sinal acion
   });
 
   assert.equal(decision.action, "CALL");
-  assert.equal(decision.isConfluence, true);
-  assert.equal(decision.isActionable, true, "Confluência de 2 famílias deve ser acionável");
+  assert.equal(decision.isActionable, false, "Colinearidade sem confirmação estrutural deve marcar isActionable=false");
 });
