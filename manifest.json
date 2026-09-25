@@ -49,6 +49,7 @@
         "src/main/injected-main.js"
       ],
       "all_frames": true,
+      "match_about_blank": true,
       "run_at": "document_start",
       "world": "MAIN"
     },
@@ -61,26 +62,42 @@
         "src/content/content-loader.js"
       ],
       "all_frames": true,
+      "match_about_blank": true,
       "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [
     {
       "resources": [
-        "src/main/*",
+        "src/*",
+        "src/background/*",
         "src/content/*",
-        "src/market/*",
+        "src/diagnostics/*",
         "src/indicators/*",
-        "src/strategy/*",
-        "src/sidepanel/*",
+        "src/main/*",
+        "src/market/*",
         "src/offscreen/*",
+        "src/popup/*",
+        "src/sidepanel/*",
         "src/storage/*",
-        "src/utils/*",
+        "src/strategy/*",
+        "src/strategy/adaptation/*",
+        "src/strategy/decision/*",
+        "src/strategy/detectors/*",
+        "src/strategy/detectors/families/*",
+        "src/strategy/engines/*",
+        "src/strategy/ensemble/*",
+        "src/strategy/pool/*",
+        "src/strategy/strategies/*",
         "src/ui/*",
-        "src/ui/i18n/*",
         "src/ui/components/*",
+        "src/ui/i18n/*",
+        "src/utils/*",
+        "assets/*",
+        "assets/icons/*",
         "assets/fonts/*",
-        "assets/logo/*"
+        "assets/logo/*",
+        "assets/sounds/*"
       ],
       "matches": [
         "https://traderoom.b2trading.io/*",

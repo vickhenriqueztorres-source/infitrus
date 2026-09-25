@@ -11,7 +11,13 @@
   try {
     const analyzerUrl = chrome.runtime.getURL("src/content/analyzer.js");
     await import(analyzerUrl);
+    if (typeof window !== "undefined") {
+      window.__oracleLoaded = true;
+    }
   } catch (err) {
-    console.error("[OracleQuant] Erro ao carregar módulos da extensão:", err);
+    if (typeof window !== "undefined") {
+      window.__oracleLoaderError = err;
+    }
+    console.error("[OracleQuant ❌ ERRO] Falha ao carregar módulos da extensão:", err);
   }
 })();

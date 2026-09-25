@@ -102,6 +102,56 @@
     } catch (err) {}
   }
 
+  // --- PALAVRAS RESERVADAS QUE NÃO SÃO ATIVOS ---
+  const NON_SYMBOL_WORDS = new Set([
+    "TICKER", "TRADE", "TRADES", "QUOTES", "QUOTE", "CANDLE", "CANDLES",
+    "BARS", "KLINE", "KLINES", "SUB", "UNSUB", "SUBSCRIBE", "UNSUBSCRIBE",
+    "PING", "PONG", "SYSTEM", "DEFAULT", "STREAM", "MARKET", "DATA", "DEPTH",
+    "ORDERBOOK", "STATUS", "AUTH", "LOGIN", "TOPIC", "CHANNEL", "EVENT",
+    "UPDATE", "UPDATES", "SNAPSHOT", "INITIAL", "CONFIG", "ERROR", "RESPONSE",
+    "REQUEST", "INFO", "HEARTBEAT", "SERVER", "CLIENT", "MESSAGE", "MESSAGES",
+    "B2TRADING", "TRADING", "BROKER"
+  ]);
+
+  function extractCleanSymbol(raw) {
+    if (!raw || typeof raw !== "string") return null;
+    const clean = raw.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
+    if (clean.length >= 3 && !NON_SYMBOL_WORDS.has(clean)) {
+      return clean;
+    }
+    return null;
+  }
+
+  function extractSymbolFromWsObject(obj) {
+    if (!obj || typeof obj !== "object") return null;
+    const directCandidates = [obj.pair, obj.symbol, obj.asset, obj.ticker, obj.s, obj.instrument];
+    for (const cand of directCandidates) {
+      const sym = extractCleanSymbol(cand);
+      if (sym) return sym;
+    }
+    const topicCandidates = [obj.channel, obj.topic, obj.stream, obj.event, obj.name];
+    for (const topic of topicCandidates) {
+      if (topic && typeof topic === "string") {
+        const parts = topic.split(/[.:@/_-]/);
+        for (const part of parts) {
+          const sym = extractCleanSymbol(part);
+          if (sym) return sym;
+        }
+      }
+    }
+    if (obj.data && typeof obj.data === "object") {
+      return extractSymbolFromWsObject(obj.data);
+    }
+    return null;
+  }
+
+  // --- TELEMETRIA EM TEMPO REAL ---
+  const activeSockets = new Set();
+  let wsMessagesCount = 0;
+  let lastWsMessageTime = 0;
+  let lastParsedTick = null;
+  const capturedChannels = new Map();
+
   // --- OBSERVADOR PASSIVO DE WEBSOCKET ---
   if (typeof window.WebSocket === "function") {
     const OriginalWebSocket = window.WebSocket;
@@ -109,17 +159,15 @@
     function parseChannelString(str) {
       if (!str || typeof str !== "string") return null;
       const trimmed = str.trim();
-      // Detecta resolução sufixada: -M1, -1, _1, -1m, _1m, -M5, etc.
       const resMatch = /[-_](?:M|m)?(\d+)(?:m|s)?$/i.exec(trimmed);
       if (resMatch) {
-        const pair = trimmed.substring(0, resMatch.index).toUpperCase();
+        const pair = extractCleanSymbol(trimmed.substring(0, resMatch.index));
         const resolutionNum = Number(resMatch[1]);
-        return { pair, tf: resolutionNum * 60 };
+        return pair ? { pair, tf: resolutionNum * 60 } : null;
       }
-      // Sem sufixo de resolução explícito: extrai par limpo
-      const cleanMatch = /^([A-Z0-9_]+)/i.exec(trimmed);
-      if (cleanMatch && cleanMatch[1]) {
-        return { pair: cleanMatch[1].toUpperCase(), tf: 60 };
+      const sym = extractCleanSymbol(trimmed);
+      if (sym) {
+        return { pair: sym, tf: 60 };
       }
       return null;
     }
@@ -141,21 +189,31 @@
               parsed = parsed[1];
             }
             if (parsed && typeof parsed === "object") {
-              const action = parsed.action || parsed.event || parsed.type;
-              if (action === "subscribe" || action === "unsubscribe") {
-                const rawChannel = parsed.channel || parsed.pair || parsed.symbol || parsed.asset || parsed.ticker || "";
-                const parsedCh = parseChannelString(rawChannel);
-                if (parsedCh && parsedCh.pair) {
+              const action = String(parsed.action || parsed.event || parsed.type || "").toLowerCase();
+              const isSub = action.includes("sub") || action.includes("join") || action.includes("watch");
+              const isUnsub = action.includes("unsub") || action.includes("leave");
+
+              if (isSub || isUnsub) {
+                const pair = extractSymbolFromWsObject(parsed);
+                if (pair) {
+                  const parsedCh = parseChannelString(parsed.channel || parsed.topic || "");
+                  const tf = parsedCh?.tf || 60;
+                  const act = isUnsub ? "unsubscribe" : "subscribe";
+                  if (act === "subscribe") {
+                    capturedChannels.set(pair, { tf, at: Date.now() });
+                  } else {
+                    capturedChannels.delete(pair);
+                  }
                   window.postMessage(
                     {
                       type: "ORACLE_CHANNEL",
                       sessionId,
-                      action,
-                      pair: parsedCh.pair,
-                      tf: parsedCh.tf || 60,
+                      action: act,
+                      pair,
+                      tf,
                       at: Date.now(),
                     },
-                    window.location.origin
+                    "*"
                   );
                 }
               }
@@ -169,10 +227,17 @@
     function PatchedWebSocket(url, protocols) {
       const ws = protocols !== undefined ? new OriginalWebSocket(url, protocols) : new OriginalWebSocket(url);
       const sanitizedUrl = sanitizeUrl(String(url));
-      const isMarketWs = sanitizedUrl.includes("ws.b2trading.io") || sanitizedUrl.includes("/ws");
+      const isMarketWs = sanitizedUrl.includes("b2trading.io") || sanitizedUrl.includes("ws");
+
+      ws.__oracleCleanUrl = sanitizedUrl;
+      ws.__oracleMsgCount = 0;
+      activeSockets.add(ws);
 
       function processReceivedData(rawData, receivedAt = Date.now()) {
         if (!rawData) return;
+        wsMessagesCount++;
+        lastWsMessageTime = Date.now();
+        ws.__oracleMsgCount = (ws.__oracleMsgCount || 0) + 1;
 
         // Suporte assíncrono para Blob
         if (rawData instanceof Blob) {
@@ -197,7 +262,6 @@
         if (typeof rawData !== "string") return;
 
         let str = rawData.trim();
-        // Remove prefixos de protocolo (ex: Engine.IO / Socket.IO 42["tick", ...])
         const firstBracket = str.search(/[{\[]/);
         if (firstBracket > 0) {
           str = str.substring(firstBracket);
@@ -208,8 +272,11 @@
           const parsed = JSON.parse(str);
           if (!parsed || typeof parsed !== "object") return;
 
-          // Resumo de WS_FRAME para o Flight Recorder (registra TODOS os frames de candle que chegam, sem filtrar por par)
-          const fPair = parsed.pair || parsed.symbol || parsed.asset || parsed.ticker || (parsed.bar && (parsed.bar.pair || parsed.bar.symbol)) || (Array.isArray(parsed) && parsed[0]?.pair) || null;
+          // Resumo de WS_FRAME para o Flight Recorder
+          const fPair = extractSymbolFromWsObject(parsed) ||
+            (parsed.bar && extractSymbolFromWsObject(parsed.bar)) ||
+            (Array.isArray(parsed) && extractSymbolFromWsObject(parsed[0])) ||
+            null;
           const fChannel = parsed.channel || parsed.name || parsed.event || parsed.type || null;
           const fBar = parsed.bar || parsed.candle || (Array.isArray(parsed.bars) ? parsed.bars[0] : (Array.isArray(parsed) ? parsed[0] : parsed));
           const fTs = fBar?.timestamp || fBar?.time || fBar?.t || parsed.time || parsed.timestamp || parsed.t || receivedAt;
@@ -219,6 +286,10 @@
           const fC = fBar?.close ?? fBar?.c ?? parsed.price ?? parsed.p ?? parsed.rate ?? null;
           const fTf = fBar?.tf || fBar?.resolution || parsed.tf || parsed.resolution || null;
           const fClosed = fBar?.closed !== undefined ? fBar.closed : (parsed.closed !== undefined ? parsed.closed : null);
+
+          if (fC !== null) {
+            lastParsedTick = { pair: fPair, price: fC, time: fTs };
+          }
 
           recMain("WS_FRAME", {
             channel: fChannel,
@@ -233,7 +304,7 @@
           });
 
           let isRelevant = false;
-          if (parsed.pair || parsed.symbol || parsed.asset || parsed.ticker) {
+          if (fPair || parsed.pair || parsed.symbol || parsed.asset || parsed.ticker) {
             isRelevant = true;
           } else if (parsed.event || parsed.name === "tick" || parsed.type === "tick") {
             isRelevant = true;
@@ -264,8 +335,6 @@
         } catch (err) {}
       }
 
-      // Anexa ouvintes passivos DIRETAMENTE via Prototype Nativo do WebSocket
-      // Filtra apenas WebSockets de mercado para evitar oscilações por sockets secundários de terceiros
       OriginalWebSocket.prototype.addEventListener.call(ws, "open", () => {
         if (!isMarketWs) return;
         recMain("WS_OPEN", { url: sanitizedUrl });
@@ -284,6 +353,7 @@
       });
 
       OriginalWebSocket.prototype.addEventListener.call(ws, "close", () => {
+        activeSockets.delete(ws);
         if (!isMarketWs) return;
         recMain("WS_CLOSE", { url: sanitizedUrl });
         try {
@@ -317,6 +387,25 @@
     PatchedWebSocket.CLOSED = OriginalWebSocket.CLOSED;
 
     window.WebSocket = PatchedWebSocket;
+
+    function scanAndHookIframes() {
+      if (typeof document === "undefined") return;
+      const iframes = document.querySelectorAll("iframe");
+      iframes.forEach((iframe) => {
+        try {
+          const frameWin = iframe.contentWindow;
+          if (!frameWin || frameWin.__oracleWsHooked) return;
+          frameWin.__oracleWsHooked = true;
+          if (typeof frameWin.WebSocket === "function" && frameWin.WebSocket !== PatchedWebSocket) {
+            frameWin.WebSocket = PatchedWebSocket;
+          }
+        } catch (_) {}
+      });
+    }
+
+    if (typeof setInterval !== "undefined") {
+      setInterval(scanAndHookIframes, 2500);
+    }
   }
 
   // --- OBSERVADOR PASSIVO DE HTTP (HISTÓRICO: FETCH & XHR) ---
@@ -412,5 +501,124 @@
     };
   }
 
-  console.log("[OracleQuant] Observadores de mercado (MAIN world) ativos no frame:", window.location.href);
+  // --- API DE DIAGNÓSTICO INTERATIVO NO CONSOLE DO NAVEGADOR ---
+  const oracleDebug = {
+    status: function () {
+      console.log("%c================ [OracleQuant] STATUS DIAGNÓSTICO ================", "color: #00ff88; font-weight: bold; font-size: 13px;");
+      const silenceSec = lastWsMessageTime ? ((Date.now() - lastWsMessageTime) / 1000).toFixed(1) : null;
+      const mainReport = {
+        "MAIN World Hook": window.__oracleMainInitialized ? "✅ Ativo" : "❌ Inativo",
+        "Content Loader": window.__oracleLoaded ? "✅ Carregado" : (window.__oracleLoaderError ? "❌ Falha" : "⏳ Carregando..."),
+        "Sockets WS Ativos": activeSockets.size,
+        "Total Msgs WS": wsMessagesCount,
+        "Tempo Sem Ticks": silenceSec !== null ? `${silenceSec}s` : "Aguardando primeiro tick...",
+        "Último Tick Capturado": lastParsedTick ? `${lastParsedTick.pair || "---"} @ ${lastParsedTick.price}` : "Nenhum",
+        "Canais Capturados": Array.from(capturedChannels.keys()).join(", ") || "Nenhum (aguardando fluxo)",
+      };
+      console.table(mainReport);
+
+      if (window.__oracleLoaderError) {
+        console.error("%c[OracleQuant ERRO DE CARREGAMENTO]", "color: #ff4444; font-weight: bold;", window.__oracleLoaderError);
+      }
+
+      console.log("%cConsultando Analyzer no contexto isolado via bridge...", "color: #00bbff;");
+      const pongPromise = new Promise((resolve) => {
+        const handler = (e) => {
+          if (e.data?.type === "ORACLE_DEBUG_PONG") {
+            window.removeEventListener("message", handler);
+            resolve(e.data.snapshot);
+          }
+        };
+        window.addEventListener("message", handler);
+        setTimeout(() => {
+          window.removeEventListener("message", handler);
+          resolve(null);
+        }, 1200);
+      });
+
+      window.postMessage({ type: "ORACLE_DEBUG_PING" }, "*");
+
+      pongPromise.then((snap) => {
+        if (!snap) {
+          console.warn("%c[Analyzer] Não respondeu em 1.2s. Verifique se o Side Panel está aberto e se a página é um frame de cálculo autorizado.", "color: #ffaa00; font-weight: bold;");
+          return;
+        }
+        console.log("%c================ ESTADO INTERNO DO ANALYZER ================", "color: #00ff88; font-weight: bold;");
+        const analyzerReport = {
+          "Estado de Dados": snap.status || "DESCONHECIDO",
+          "Ativo Selecionado": snap.currentSymbol || "Nenhum",
+          "Ativos Monitorados": snap.activeSymbols?.join(", ") || "Nenhum",
+          "Velas no Store": JSON.stringify(snap.candleCounts || {}),
+          "Últimos Preços": JSON.stringify(snap.lastPrices || {}),
+          "Gravações Storage": snap.storageWrites ?? 0,
+          "Sinais Auditados": snap.signalsCount ?? 0,
+          "Fase do Sinal": snap.lifecycleSnapshot?.current?.phase || snap.lifecycleSnapshot?.trade?.phase || "SCANNING",
+        };
+        console.table(analyzerReport);
+        console.log("%c👉 Dica: Execute oracleDebug.testTick('EURUSD', 1.0850) para enviar tick de teste.", "color: #00bbff;");
+      });
+      return "Diagnóstico iniciado...";
+    },
+
+    ws: function () {
+      console.log("%c================ CONEXÕES WEBSOCKET B2TRADING ================", "color: #00bbff; font-weight: bold;");
+      const list = [];
+      let i = 1;
+      activeSockets.forEach((ws) => {
+        const stateStr = ws.readyState === 0 ? "CONNECTING" : ws.readyState === 1 ? "OPEN" : ws.readyState === 2 ? "CLOSING" : "CLOSED";
+        list.push({
+          "#": i++,
+          "URL": ws.__oracleCleanUrl || ws.url || "---",
+          "Estado": stateStr,
+          "Msgs": ws.__oracleMsgCount || 0,
+        });
+      });
+      if (list.length === 0) {
+        console.warn("Nenhum WebSocket ativo interceptado.");
+      } else {
+        console.table(list);
+      }
+      return list;
+    },
+
+    testTick: function (pair = "EURUSD", price = 1.0850) {
+      const p = Number(price);
+      const sym = String(pair).toUpperCase();
+      console.log(`%c[OracleQuant TEST] Injetando tick de teste: ${sym} = ${p}`, "color: #00ff88; font-weight: bold;");
+      dispatchToBridge("websocket", {
+        url: "wss://test.b2trading.io/ws",
+        payload: {
+          pair: sym,
+          data: {
+            time: Date.now(),
+            open: p,
+            high: p + 0.0001,
+            low: p - 0.0001,
+            close: p,
+            volume: 10,
+          },
+        },
+        receivedAt: Date.now(),
+      });
+      return `Tick enviado para ${sym} a ${p}`;
+    },
+
+    signals: function () {
+      return this.status();
+    },
+
+    help: function () {
+      console.log("%c================ ORACLE QUANT COMANDOS NO CONSOLE ================", "color: #00ff88; font-weight: bold;");
+      console.log("%coracleDebug.status()      %c-> Exibe status completo do WebSocket, Analyzer e velas.", "color: #ffff00;", "color: #ffffff;");
+      console.log("%coracleDebug.ws()          %c-> Lista todas as conexões WebSocket ativas e URLs.", "color: #ffff00;", "color: #ffffff;");
+      console.log("%coracleDebug.testTick(par, preco) %c-> Injeta um tick de teste para validar o pipeline.", "color: #ffff00;", "color: #ffffff;");
+      console.log("%coracleDebug.help()        %c-> Exibe esta lista de comandos.", "color: #ffff00;", "color: #ffffff;");
+    },
+  };
+
+  window.oracleDebug = oracleDebug;
+  window.b2debug = oracleDebug;
+
+  console.log("%c[OracleQuant] ✅ Observador ativo no Traderoom!", "color: #00ff88; font-weight: bold; font-size: 13px;");
+  console.log("%c👉 Digite %coracleDebug.status()%c no Console para inspecionar o fluxo em tempo real.", "color: #aaaaaa;", "color: #00ff88; font-weight: bold;", "color: #aaaaaa;");
 })();

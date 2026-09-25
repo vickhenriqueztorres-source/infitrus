@@ -41,21 +41,45 @@ import { rec, configureFlightRecorder, generateUUID, hashCandles } from "../diag
  * @param {any} payload
  * @returns {string|null} Símbolo em caixa alta ou null
  */
+export const NON_SYMBOL_WORDS = new Set([
+  "TICKER", "TRADE", "TRADES", "QUOTES", "QUOTE", "CANDLE", "CANDLES",
+  "BARS", "KLINE", "KLINES", "SUB", "UNSUB", "SUBSCRIBE", "UNSUBSCRIBE",
+  "PING", "PONG", "SYSTEM", "DEFAULT", "STREAM", "MARKET", "DATA", "DEPTH",
+  "ORDERBOOK", "STATUS", "AUTH", "LOGIN", "TOPIC", "CHANNEL", "EVENT",
+  "UPDATE", "UPDATES", "SNAPSHOT", "INITIAL", "CONFIG", "ERROR", "RESPONSE",
+  "REQUEST", "INFO", "HEARTBEAT", "SERVER", "CLIENT", "MESSAGE", "MESSAGES",
+  "B2TRADING", "TRADING", "BROKER"
+]);
+
+function cleanSymbolCandidate(str) {
+  if (!str || typeof str !== "string") return null;
+  const clean = str.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
+  if (clean.length >= 3 && !NON_SYMBOL_WORDS.has(clean)) {
+    return clean;
+  }
+  return null;
+}
+
 export function extractSymbolFromPayload(payload) {
   if (!payload || typeof payload !== "object") return null;
-  const direct = payload.pair || payload.symbol || payload.asset || payload.ticker;
-  if (direct && typeof direct === "string") return direct.trim().toUpperCase();
+  const directCandidates = [payload.pair, payload.symbol, payload.asset, payload.ticker, payload.s, payload.instrument];
+  for (const cand of directCandidates) {
+    const sym = cleanSymbolCandidate(cand);
+    if (sym) return sym;
+  }
   if (Array.isArray(payload.messages) && payload.messages.length > 0) {
     for (const m of payload.messages) {
       if (!m || typeof m !== "object") continue;
-      const s = m.pair || m.symbol || m.asset || m.ticker || m.data?.pair || m.data?.symbol || m.data?.asset;
-      if (s && typeof s === "string") return s.trim().toUpperCase();
+      const cand = m.pair || m.symbol || m.asset || m.ticker || m.data?.pair || m.data?.symbol || m.data?.asset;
+      const sym = cleanSymbolCandidate(cand);
+      if (sym) return sym;
     }
   }
   if (payload.data && typeof payload.data === "object") {
     const d = payload.data;
-    const s = d.pair || d.symbol || d.asset || d.ticker;
-    if (s && typeof s === "string") return s.trim().toUpperCase();
+    const cand = d.pair || d.symbol || d.asset || d.ticker || d.s;
+    const sym = cleanSymbolCandidate(cand);
+    if (sym) return sym;
   }
   return null;
 }
@@ -429,6 +453,30 @@ export class MarketAnalyzer {
       onChannel: (ch) => this.activeChannel.onChannel(ch),
     });
 
+    // 1.1 Responde a pings de diagnóstico do MAIN world (oracleDebug.status())
+    if (typeof window !== "undefined") {
+      this._onDebugPing = (e) => {
+        if (e.data?.type === "ORACLE_DEBUG_PING") {
+          const rep = this.currentSymbol ? this.quality.getReport(this.currentSymbol, this.timeframeSeconds) : null;
+          const snapshot = {
+            instanceId: this.instanceId,
+            status: rep?.state || "BOOTING",
+            currentSymbol: this.currentSymbol,
+            activeSymbols: Array.from(this.activeSymbols),
+            candleCounts: Object.fromEntries(
+              Array.from(this.activeSymbols).map((s) => [s, this.store.getCandles(s, this.timeframeSeconds).length])
+            ),
+            lastPrices: Object.fromEntries(this.lastPrices),
+            storageWrites: this._storageWritesCount,
+            signalsCount: this.signalAuditor.getSignals().length,
+            lifecycleSnapshot: this.currentLifecycleSnapshot,
+          };
+          window.postMessage({ type: "ORACLE_DEBUG_PONG", snapshot }, "*");
+        }
+      };
+      window.addEventListener("message", this._onDebugPing);
+    }
+
     // 2. Verificação periódica de Heartbeat / Stale feed a cada 2.5s e loop contínuo do SignalLifecycle
     if (typeof window !== "undefined") {
       this._staleInterval = setInterval(() => {
@@ -597,6 +645,13 @@ export class MarketAnalyzer {
         document.removeEventListener("visibilitychange", this._onVisibilityChange);
       } catch (_) {}
       this._onVisibilityChange = null;
+    }
+
+    if (this._onDebugPing && typeof window !== "undefined" && window.removeEventListener) {
+      try {
+        window.removeEventListener("message", this._onDebugPing);
+      } catch (_) {}
+      this._onDebugPing = null;
     }
 
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage && this.tabId) {
@@ -900,7 +955,21 @@ export class MarketAnalyzer {
         continue;
       }
 
-      const isSubscribed = Boolean(this.activeChannel.hasPair(candleSym) || (activePair === candleSym));
+      let isSubscribed = Boolean(this.activeChannel.hasPair(candleSym) || (activePair === candleSym));
+      if (!isSubscribed) {
+        const domSym = detectActiveSymbolFromDOM();
+        // Se o símbolo do tick coincide com o gráfico na tela (DOM):
+        if (domSym && domSym === candleSym) {
+          this.activeChannel.onChannel({
+            type: "ORACLE_CHANNEL",
+            action: "subscribe",
+            pair: candleSym,
+            tf: activeTf,
+            at: Date.now(),
+          });
+          isSubscribed = true;
+        }
+      }
       if (!isSubscribed) {
         // Ticks de watchlist/background sem canal aberto: apenas armazenados no store para warm-up
         continue;
