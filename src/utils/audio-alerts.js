@@ -124,24 +124,55 @@ export class AudioAlertManager {
     } catch (_) {}
   }
 
-  /** Toca la firma sonora corta de señal: dos pulsos ascendentes tipo sonar. */
-  playSignalAlert() {
+  /**
+   * Alerta sonoro de Pré-Sinal CALL (Compra / Alta).
+   * Tríade maior ascendente harmoniosa e brilhante: Dó 5 (523.25 Hz) -> Mi 5 (659.25 Hz) -> Sol 5 (783.99 Hz).
+   */
+  playCallAlert() {
     if (!this.isEnabled) return;
     const ctx = this._ensureContext();
     if (!ctx) return;
     if (ctx.state === "suspended") ctx.resume();
 
     const now = ctx.currentTime;
-    this._playTone(880, now, 0.11, "sine", this.volume * 0.34);
-    this._playTone(1320, now + 0.13, 0.11, "sine", this.volume * 0.38);
+    this._playTone(523.25, now, 0.08, "sine", this.volume * 0.45);
+    this._playTone(659.25, now + 0.09, 0.08, "sine", this.volume * 0.50);
+    this._playTone(783.99, now + 0.18, 0.16, "sine", this.volume * 0.55);
   }
 
-  playCallAlert() {
-    this.playSignalAlert();
-  }
-
+  /**
+   * Alerta sonoro de Pré-Sinal PUT (Venda / Baixa).
+   * Tríade menor descendente encorpada e firme: Sol 5 (783.99 Hz) -> Mi bemol 5 (622.25 Hz) -> Dó 5 (523.25 Hz).
+   */
   playPutAlert() {
-    this.playSignalAlert();
+    if (!this.isEnabled) return;
+    const ctx = this._ensureContext();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+
+    const now = ctx.currentTime;
+    this._playTone(783.99, now, 0.08, "sine", this.volume * 0.50);
+    this._playTone(622.25, now + 0.09, 0.08, "sine", this.volume * 0.50);
+    this._playTone(523.25, now + 0.18, 0.16, "sine", this.volume * 0.55);
+  }
+
+  /**
+   * Alerta sonoro de EXECUÇÃO IMEDIATA (Segundo 00 - ENTRY_NOW).
+   * Acorde duplo de impacto com ataque enérgico: C6 (1046.5 Hz) + G6 (1568 Hz) + confirmação C7 (2093 Hz).
+   * Som de ação imperativo e inconfundível.
+   */
+  playEntryAlert() {
+    if (!this.isEnabled) return;
+    const ctx = this._ensureContext();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+
+    const now = ctx.currentTime;
+    // Impacto duplo simultâneo (C6 + G6)
+    this._playTone(1046.5, now, 0.12, "sine", this.volume * 0.85);
+    this._playTone(1567.98, now, 0.12, "triangle", this.volume * 0.70);
+    // Ping agudo de confirmação (C7)
+    this._playTone(2093.0, now + 0.09, 0.18, "sine", this.volume * 0.75);
   }
 
   /**
@@ -154,15 +185,61 @@ export class AudioAlertManager {
     if (!ctx) return;
     if (ctx.state === "suspended") ctx.resume();
 
-    const now = ctx.currentTime;
     if (secondsRemaining > 0) {
-      // Bip curto e discreto nos segundos 3, 2, 1 (880 Hz, 30ms)
-      this._playTone(880, now, 0.04, "sine", this.volume * 0.4);
+      // Bip curto e discreto nos segundos 3, 2, 1 (sonar tick: 880 Hz, 35ms)
+      const now = ctx.currentTime;
+      this._playTone(880, now, 0.035, "sine", this.volume * 0.40);
     } else {
-      // Sinal de entrada no segundo 0 (dois tons rápidos e agudos: 1046 Hz e 1318 Hz)
-      this._playTone(1046.5, now, 0.06, "sine", this.volume * 0.8);
-      this._playTone(1318.5, now + 0.07, 0.12, "sine", this.volume * 0.9);
+      // Segundo 0: executa alerta enérgico de entrada
+      this.playEntryAlert();
     }
+  }
+
+  /**
+   * Som de vitória (WIN). Fanfarra curta ascendente.
+   */
+  playWinAlert() {
+    if (!this.isEnabled) return;
+    const ctx = this._ensureContext();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+
+    const now = ctx.currentTime;
+    this._playTone(783.99, now, 0.08, "sine", this.volume * 0.45);
+    this._playTone(1046.5, now + 0.08, 0.08, "sine", this.volume * 0.50);
+    this._playTone(1318.5, now + 0.16, 0.22, "sine", this.volume * 0.55);
+  }
+
+  /**
+   * Som de perda (LOSS). Dois tons discretos em decaimento.
+   */
+  playLossAlert() {
+    if (!this.isEnabled) return;
+    const ctx = this._ensureContext();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+
+    const now = ctx.currentTime;
+    this._playTone(392.0, now, 0.10, "sine", this.volume * 0.35);
+    this._playTone(329.63, now + 0.11, 0.18, "sine", this.volume * 0.35);
+  }
+
+  /**
+   * Som de empate (DOJI).
+   */
+  playDojiAlert() {
+    if (!this.isEnabled) return;
+    const ctx = this._ensureContext();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+
+    const now = ctx.currentTime;
+    this._playTone(440.0, now, 0.15, "sine", this.volume * 0.30);
+  }
+
+  /** Toca a firma sonora genérica de sinal (retrocompatibilidade) */
+  playSignalAlert() {
+    this.playCallAlert();
   }
 
   /**

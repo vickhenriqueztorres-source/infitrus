@@ -40,6 +40,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       secondaryText: null,
       phase: "SCANNING",
       direction: null,
+      pair: "Mercado",
       secondsRemaining: 45,
       progressPct: 0,
       badgeText: "ESCANEANDO",
@@ -62,6 +63,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       secondaryText: null,
       phase: "TF_NOT_SUPPORTED",
       direction: null,
+      pair: snapshot?.pair || snapshot?.symbol || "Mercado",
       secondsRemaining: 0,
       progressPct: 0,
       badgeText: "TF NO SOPORTADO",
@@ -160,6 +162,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
           });
 
   function wrap(res) {
+    res.pair = pair;
     res.tradeCard = tradeCard;
     res.opportunityCard = opportunityCard;
     return res;

@@ -91,7 +91,10 @@ function playSoundList(sounds = []) {
     if (s === "call") audioAlertManager.playCallAlert();
     else if (s === "put") audioAlertManager.playPutAlert();
     else if (s === "pip") audioAlertManager.playCountdownPip(1);
-    else if (s === "entry") audioAlertManager.playCountdownPip(0);
+    else if (s === "entry") audioAlertManager.playEntryAlert();
+    else if (s === "win") audioAlertManager.playWinAlert();
+    else if (s === "loss") audioAlertManager.playLossAlert();
+    else if (s === "doji") audioAlertManager.playDojiAlert();
   }
 }
 
@@ -101,22 +104,66 @@ function playSoundList(sounds = []) {
  */
 function updateClockOnlyUI() {
   const nowSec = localMarketClock.nowSec();
+  const currentAsset = activeSignalData?.symbol || panelSelectedSymbol || "MERCADO";
   const lifecycleData = activeSignalData?.lifecycle || lastLifecycle || {
-    pair: activeSignalData?.symbol || "Mercado",
+    pair: currentAsset,
     tf: activeSignalData?.timeframeSeconds || 60,
   };
 
   const cardData = formatLifecycleCard(lifecycleData, nowSec);
   latestFormattedCardData = cardData;
 
+  const hasSimultaneous = Boolean(cardData.tradeCard?.hasTrade && cardData.opportunityCard?.hasOpportunity);
+  const activeDisplay = hasSimultaneous ? cardData.tradeCard : cardData;
+
+  // 0. Atualiza Destaque Gigante do Ativo e Ordem no Topo do Card
+  const heroAssetEl = document.getElementById("signal-hero-asset");
+  if (heroAssetEl) {
+    heroAssetEl.textContent = currentAsset;
+  }
+
+  const heroActionEl = document.getElementById("signal-hero-action");
+  const heroIconEl = document.getElementById("signal-hero-icon");
+  const heroOrderEl = document.getElementById("signal-hero-order");
+
+  if (heroActionEl && heroIconEl && heroOrderEl) {
+    const dir = activeDisplay.direction;
+    const isCall = dir === "CALL";
+    const dirSymbol = isCall ? "▲" : "▼";
+
+    if (activeDisplay.phase === "ENTRY_NOW") {
+      heroActionEl.className = `hero-action-badge execute ${isCall ? "call" : "put"}`;
+      heroIconEl.textContent = dirSymbol;
+      heroOrderEl.textContent = `¡ENTRA ${dir}! ${activeDisplay.secondsRemaining}s`;
+    } else if (activeDisplay.phase === "PRE_SIGNAL") {
+      heroActionEl.className = `hero-action-badge ${isCall ? "call" : "put"}`;
+      heroIconEl.textContent = dirSymbol;
+      heroOrderEl.textContent = `PRE-SEÑAL ${dir} (${activeDisplay.secondsRemaining}s)`;
+    } else if (activeDisplay.phase === "IN_TRADE") {
+      heroActionEl.className = `hero-action-badge ${isCall ? "call" : "put"}`;
+      heroIconEl.textContent = dirSymbol;
+      heroOrderEl.textContent = `OPERANDO ${dir} (${activeDisplay.secondsRemaining}s)`;
+    } else if (activeDisplay.phase === "SETTLED") {
+      const resClass = activeDisplay.badgeClass === "call" ? "call" : (activeDisplay.badgeClass === "put" ? "put" : "wait");
+      heroActionEl.className = `hero-action-badge ${resClass}`;
+      heroIconEl.textContent = activeDisplay.badgeClass === "call" ? "✓" : (activeDisplay.badgeClass === "put" ? "✗" : "―");
+      heroOrderEl.textContent = activeDisplay.badgeText;
+    } else if (activeDisplay.phase === "DECIDING") {
+      heroActionEl.className = "hero-action-badge wait";
+      heroIconEl.textContent = "◎";
+      heroOrderEl.textContent = `DECIDIENDO (${activeDisplay.secondsRemaining}s)`;
+    } else {
+      heroActionEl.className = "hero-action-badge wait";
+      heroIconEl.textContent = "◎";
+      heroOrderEl.textContent = "ESCANEANDO";
+    }
+  }
+
   // 1. Classes do Card e acessibilidade aria-live (assertive em ENTRY_NOW, polite no resto)
   const card = document.getElementById("signal-card");
   if (card) {
     card.classList.remove("is-call", "is-put", "is-wait", "is-execute", "is-in-trade");
     card.setAttribute("aria-live", cardData.ariaLive);
-
-    const hasSimultaneous = Boolean(cardData.tradeCard?.hasTrade && cardData.opportunityCard?.hasOpportunity);
-    const activeDisplay = hasSimultaneous ? cardData.tradeCard : cardData;
 
     if (activeDisplay.phase === "ENTRY_NOW") {
       card.classList.add("is-execute", activeDisplay.direction === "CALL" ? "is-call" : "is-put");
@@ -230,9 +277,18 @@ function updateClockOnlyUI() {
   }
 
   // 8. Pips nos segundos 57, 58 e 59 se houver PRE_SIGNAL ativo
-  if (lastLifecycle?.current?.phase === "PRE_SIGNAL") {
+  let preSignalLc = lastLifecycle?.current?.phase === "PRE_SIGNAL" ? lastLifecycle : null;
+  if (!preSignalLc && latestRenderedState?.symbols) {
+    for (const sData of Object.values(latestRenderedState.symbols)) {
+      if (sData?.lifecycle?.current?.phase === "PRE_SIGNAL") {
+        preSignalLc = sData.lifecycle;
+        break;
+      }
+    }
+  }
+  if (preSignalLc) {
     const sec = localMarketClock.secondInCandle(60);
-    const pipSounds = soundsForTransition(lastLifecycle, lastLifecycle, sec, playedSoundSet);
+    const pipSounds = soundsForTransition(preSignalLc, preSignalLc, sec, playedSoundSet);
     playSoundList(pipSounds);
   }
 }
@@ -630,6 +686,13 @@ function renderMultiAssetBar(state, allSymbols = [], currentSelected) {
     const pill = document.createElement("button");
     pill.type = "button";
     pill.className = `asset-pill ${isActive ? "is-active" : ""}`;
+    if (isActive) {
+      setTimeout(() => {
+        try {
+          pill.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+        } catch (_) {}
+      }, 0);
+    }
 
     // Indicador da Operação Ativa
     if (isTradeActive && tradeDir) {
@@ -736,7 +799,41 @@ function renderState(state = null, signals = [], logs = []) {
 
     // Suporte Multi-Chart: identifica símbolos ativos e o ativo selecionado
     const allSymbols = state.allSymbols || (state.symbols ? Object.keys(state.symbols) : (state.symbol ? [state.symbol] : []));
-    if (panelSelectedSymbol && state.symbols?.[panelSelectedSymbol]) {
+
+    // Auto-Focus Global Inteligente:
+    // Se algum ativo monitorado tiver sinal ativo ou em formação, foca-o automaticamente
+    let activeSignalSymbol = null;
+    if (state.symbols) {
+      // Prioridade 1: ENTRY_NOW (momento de entrada imediata)
+      for (const [sym, data] of Object.entries(state.symbols)) {
+        if (data.lifecycle?.trade?.phase === "ENTRY_NOW") {
+          activeSignalSymbol = sym;
+          break;
+        }
+      }
+      // Prioridade 2: PRE_SIGNAL (aviso prévio e contagem regressiva)
+      if (!activeSignalSymbol) {
+        for (const [sym, data] of Object.entries(state.symbols)) {
+          if (data.lifecycle?.current?.phase === "PRE_SIGNAL") {
+            activeSignalSymbol = sym;
+            break;
+          }
+        }
+      }
+      // Prioridade 3: IN_TRADE (operação em andamento)
+      if (!activeSignalSymbol) {
+        for (const [sym, data] of Object.entries(state.symbols)) {
+          if (data.lifecycle?.trade?.phase === "IN_TRADE") {
+            activeSignalSymbol = sym;
+            break;
+          }
+        }
+      }
+    }
+
+    if (activeSignalSymbol) {
+      panelSelectedSymbol = activeSignalSymbol;
+    } else if (panelSelectedSymbol && state.symbols?.[panelSelectedSymbol]) {
       // Mantém o símbolo escolhido pelo usuário se ainda for válido
     } else {
       panelSelectedSymbol = state.selectedSymbol || state.symbol || allSymbols[0] || null;
@@ -756,8 +853,19 @@ function renderState(state = null, signals = [], logs = []) {
     }
 
     // Avalia efeitos sonoros da transição do ciclo de vida
-    const nextLifecycle = displayData.lifecycle || null;
     const sec = localMarketClock.secondInCandle(60);
+
+    // Avaliação global de sons para todos os símbolos (garante disparo mesmo em background)
+    if (state.symbols) {
+      for (const [sym, symData] of Object.entries(state.symbols)) {
+        const symLc = symData?.lifecycle;
+        if (!symLc) continue;
+        const symSounds = soundsForTransition(null, symLc, sec, playedSoundSet);
+        playSoundList(symSounds);
+      }
+    }
+
+    const nextLifecycle = displayData.lifecycle || null;
     if (!lastLifecycle && nextLifecycle) {
       // Inicialização do painel: marca eventos pré-existentes como já tocados
       if (nextLifecycle.lastResult?.id) playedSoundSet.add(`${nextLifecycle.lastResult.id}:SETTLED`);

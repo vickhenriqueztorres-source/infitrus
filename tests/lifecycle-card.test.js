@@ -329,3 +329,19 @@ test("formatLifecycleCard: IN_TRADE ao cruzar 60s (remTrade <= 0) exibe OPERACI�
   assert.equal(cardExpired.secondaryText, "Aguardando confirmación de vela cerrada...");
 });
 
+test("formatLifecycleCard: propaga pair explicitamente para renderização do hero asset", () => {
+  const snapshot1 = { pair: "APPLE_OTC", current: { phase: "SCANNING", formingTs: 1700000000 } };
+  const card1 = formatLifecycleCard(snapshot1, 1700000010);
+  assert.equal(card1.pair, "APPLE_OTC");
+
+  const snapshot2 = {
+    pair: "ARBITRIUM_OTC",
+    trade: { phase: "ENTRY_NOW", direction: "PUT", targetTs: 1700000060, pair: "ARBITRIUM_OTC" }
+  };
+  const card2 = formatLifecycleCard(snapshot2, 1700000060);
+  assert.equal(card2.pair, "ARBITRIUM_OTC");
+  assert.equal(card2.phase, "ENTRY_NOW");
+
+  const cardEmpty = formatLifecycleCard(null, 1700000000);
+  assert.equal(cardEmpty.pair, "Mercado");
+});

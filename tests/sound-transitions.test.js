@@ -94,3 +94,28 @@ test("soundsForTransition: SETTLED gera som de resultado WIN/LOSS/DOJI e dedupli
   const soundsDoji = soundsForTransition(null, lcDoji, 60, new Set());
   assert.deepEqual(soundsDoji, ["doji"]);
 });
+
+test("AudioAlertManager: métodos de alertas sonoros sintetizados são instanciáveis e chamáveis", async () => {
+  const { AudioAlertManager, audioAlertManager } = await import("../src/utils/audio-alerts.js");
+  assert.ok(audioAlertManager instanceof AudioAlertManager);
+  assert.equal(typeof audioAlertManager.playCallAlert, "function");
+  assert.equal(typeof audioAlertManager.playPutAlert, "function");
+  assert.equal(typeof audioAlertManager.playEntryAlert, "function");
+  assert.equal(typeof audioAlertManager.playCountdownPip, "function");
+  assert.equal(typeof audioAlertManager.playWinAlert, "function");
+  assert.equal(typeof audioAlertManager.playLossAlert, "function");
+  assert.equal(typeof audioAlertManager.playDojiAlert, "function");
+
+  // Chamadas seguras em ambiente sem Web Audio Context (Node.js) não devem lançar exceções
+  assert.doesNotThrow(() => {
+    audioAlertManager.playCallAlert();
+    audioAlertManager.playPutAlert();
+    audioAlertManager.playEntryAlert();
+    audioAlertManager.playCountdownPip(3);
+    audioAlertManager.playCountdownPip(0);
+    audioAlertManager.playWinAlert();
+    audioAlertManager.playLossAlert();
+    audioAlertManager.playDojiAlert();
+  });
+});
+
