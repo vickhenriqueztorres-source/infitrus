@@ -9,11 +9,9 @@ import assert from "node:assert/strict";
 import { isComputeFrame, COMPUTE_HOSTS, MarketAnalyzer } from "../src/content/analyzer.js";
 import { validateBridgeMessage } from "../src/content/bridge.js";
 
-test("isComputeFrame: Identifica exclusivamente chart.b2trading.io como frame de cálculo (sem fallback TOP)", () => {
+test("isComputeFrame: Identifica chart.b2trading.io e traderoom.b2trading.io como frames de cálculo", () => {
   assert.equal(isComputeFrame("chart.b2trading.io"), true, "chart.b2trading.io DEVE ser frame de cálculo");
-  assert.equal(isComputeFrame("traderoom.b2trading.io"), false, "traderoom.b2trading.io NUNCA pode calcular");
-  assert.equal(isComputeFrame("traderoom.b2trading.io", { hasChartIframe: true }), false);
-  assert.equal(isComputeFrame("traderoom.b2trading.io", { hasChartIframe: false }), false);
+  assert.equal(isComputeFrame("traderoom.b2trading.io"), true, "traderoom.b2trading.io DEVE ser frame de cálculo no frame TOP");
   assert.equal(isComputeFrame("app.b2trading.io"), false, "Outros subdomínios não podem ser frame de cálculo");
   assert.equal(isComputeFrame(""), false, "Hostname vazio não pode ser frame de cálculo");
 });
@@ -199,4 +197,66 @@ test("MarketAnalyzer: destroy() real desliga listeners e bloqueia eventos e escr
   } finally {
     globalThis.chrome = origChrome;
   }
+});
+
+test("MarketAnalyzer: Suporta múltiplos gráficos simultâneos (Multi-Chart) sem descartar ticks nem contaminar ativos", async () => {
+  const analyzer = new MarketAnalyzer();
+  analyzer.tabId = 202;
+
+  // Gráfico 1 subscreve ARBITRIUM_OTC
+  analyzer.activeChannel.onChannel({ action: "subscribe", pair: "ARBITRIUM_OTC", tf: 60 });
+  // Gráfico 2 subscreve 1000SATS_OTC
+  analyzer.activeChannel.onChannel({ action: "subscribe", pair: "1000SATS_OTC", tf: 60 });
+
+  assert.equal(analyzer.activeChannel.hasPair("ARBITRIUM_OTC"), true);
+  assert.equal(analyzer.activeChannel.hasPair("1000SATS_OTC"), true);
+
+  const baseTs = 1727050000;
+
+  // Ticks intercalados de ambos os gráficos
+  await analyzer.processRealtimePayload({
+    pair: "ARBITRIUM_OTC",
+    messages: [{ data: { time: baseTs * 1000, open: 495.10, high: 495.50, low: 495.00, close: 495.20 } }],
+  });
+
+  await analyzer.processRealtimePayload({
+    pair: "1000SATS_OTC",
+    messages: [{ data: { time: baseTs * 1000, open: 0.00025, high: 0.00028, low: 0.00024, close: 0.00026 } }],
+  });
+
+  await analyzer.processRealtimePayload({
+    pair: "ARBITRIUM_OTC",
+    messages: [{ data: { time: (baseTs + 10) * 1000, open: 495.10, high: 495.80, low: 495.00, close: 495.75 } }],
+  });
+
+  await analyzer.processRealtimePayload({
+    pair: "1000SATS_OTC",
+    messages: [{ data: { time: (baseTs + 10) * 1000, open: 0.00025, high: 0.00030, low: 0.00024, close: 0.00029 } }],
+  });
+
+  // Ambos os ativos devem estar ativos sem que um tenha cancelado o outro
+  assert.equal(analyzer.activeSymbols.has("ARBITRIUM_OTC"), true);
+  assert.equal(analyzer.activeSymbols.has("1000SATS_OTC"), true);
+
+  const lastArb = analyzer.store.getLast("ARBITRIUM_OTC", 60);
+  const lastSats = analyzer.store.getLast("1000SATS_OTC", 60);
+
+  assert.ok(lastArb, "ARBITRIUM_OTC deve possuir candle no store");
+  assert.ok(lastSats, "1000SATS_OTC deve possuir candle no store");
+
+  assert.equal(lastArb.close, 495.75);
+  assert.equal(lastSats.close, 0.00029);
+
+  // Isolamento estrito de preços
+  assert.equal(analyzer.lastPrices.get("ARBITRIUM_OTC"), "495.75000");
+  assert.equal(analyzer.lastPrices.get("1000SATS_OTC"), "0.00029");
+
+  // Alternância de símbolo selecionado
+  analyzer.selectSymbol("ARBITRIUM_OTC");
+  assert.equal(analyzer.currentSymbol, "ARBITRIUM_OTC");
+
+  analyzer.selectSymbol("1000SATS_OTC");
+  assert.equal(analyzer.currentSymbol, "1000SATS_OTC");
+
+  analyzer.destroy();
 });

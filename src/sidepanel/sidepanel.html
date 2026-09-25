@@ -63,6 +63,24 @@
 
     .window-badge{padding:2px 6px;border-radius:4px;background:rgba(138,155,163,.15);color:var(--steel);font-size:9.5px;font-weight:600}
 
+    /* Multi-Chart Bar & Asset Pills */
+    .multi-asset-bar{display:flex;align-items:center;gap:6px;margin:6px 0 8px;padding:6px 8px;background:rgba(255,255,255,.03);border:1px solid var(--border,#8A9BA333);border-radius:8px;overflow-x:auto}
+    .multi-asset-title{font-size:9px;color:var(--steel,#8A9BA3);font-weight:700;letter-spacing:.05em;white-space:nowrap}
+    .multi-asset-pills{display:flex;gap:4px;overflow-x:auto;width:100%}
+    .asset-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:12px;background:rgba(138,155,163,.1);border:1px solid var(--border,#8A9BA333);color:var(--steel,#8A9BA3);font-size:9.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .15s}
+    .asset-pill:hover{background:rgba(63,224,197,.12);border-color:#3FE0C5;color:var(--ice,#E6EEF0)}
+    .asset-pill.is-active{background:rgba(63,224,197,.2);border-color:#3FE0C5;color:#3FE0C5;font-weight:700}
+    .pill-dot{width:6px;height:6px;border-radius:50%;background:var(--steel,#8A9BA3)}
+    .pill-dot.call{background:#3FE0C5;box-shadow:0 0 6px #3FE0C5}
+    .pill-dot.put{background:#FF5A6E;box-shadow:0 0 6px #FF5A6E}
+    .pill-dot.pulse{animation:pulse .7s infinite}
+
+    /* Cross-Asset Alert Banner */
+    .cross-asset-alert{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;margin-bottom:8px;border-radius:6px;background:rgba(63,224,197,.15);border:1px solid #3FE0C5;color:#3FE0C5;font-size:10px;font-weight:600}
+    .cross-asset-alert.put{background:rgba(255,90,110,.15);border-color:#FF5A6E;color:#FF5A6E}
+    .cross-asset-alert button{padding:2px 8px;border-radius:4px;border:none;background:#3FE0C5;color:#0B1A1F;font-weight:700;font-size:9.5px;cursor:pointer}
+    .cross-asset-alert.put button{background:#FF5A6E;color:#fff}
+
     /* Cards da Aba Análise Quantitativa */
     .quant-card{margin-top:8px;padding:10px;border-radius:10px;border:1px solid var(--border);background:var(--surface)}
     .quant-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:9px;color:var(--steel);letter-spacing:.05em}
@@ -153,6 +171,18 @@
 
     <!-- ABA 1: SINAL & MONITOR DE MERCADO -->
     <div id="view-signal" class="view-pane">
+      <!-- Barra Multi-Gráficos / Seletor de Ativos -->
+      <div id="multi-asset-bar" class="multi-asset-bar" style="display:none;" aria-label="Gráficos Activos">
+        <span class="multi-asset-title">GRÁFICOS:</span>
+        <div id="multi-asset-pills" class="multi-asset-pills"></div>
+      </div>
+
+      <!-- Banner de Alerta Multi-Ativo (Cross-Asset Alert) -->
+      <div id="cross-asset-alert" class="cross-asset-alert" style="display:none;">
+        <span id="cross-asset-msg">⚡ Señal en outro par</span>
+        <button id="cross-asset-btn" type="button">Ver</button>
+      </div>
+
       <section class="status-card">
         <p class="eyebrow"><i id="status-dot" class="dot amber"></i><span id="status-copy">Activo · Buscando la transmisión…</span></p>
         <canvas id="side-wave" width="360" height="48" aria-label="Frecuencia del mercado"></canvas>

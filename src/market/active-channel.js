@@ -18,6 +18,7 @@ export class ActiveChannel {
     this._subscriptions = new Map(); // key `${pair}:${tf}` -> { pair, tf, at }
     this._lastHistory = null; // { pair, tf, at }
     this._listeners = new Set();
+    this._unsubListeners = new Set();
     this._current = null; // { pair, tf } | null
   }
 
@@ -39,8 +40,44 @@ export class ActiveChannel {
       this._subscriptions.set(key, { pair: normalizedPair, tf: normalizedTf, at });
     } else if (action === "unsubscribe") {
       this._subscriptions.delete(key);
+      for (const fn of this._unsubListeners) {
+        try { fn(normalizedPair, normalizedTf); } catch (_) {}
+      }
     }
     this._recompute();
+  }
+
+  /**
+   * Retorna todas as subscrições ativas atualmente.
+   * @returns {Array<{ pair: string, tf: number, at: number }>}
+   */
+  getAll() {
+    return Array.from(this._subscriptions.values());
+  }
+
+  /**
+   * Verifica se determinado par está subscrito.
+   * @param {string} pair
+   * @returns {boolean}
+   */
+  hasPair(pair) {
+    if (!pair) return false;
+    const norm = String(pair).trim().toUpperCase();
+    for (const sub of this._subscriptions.values()) {
+      if (sub.pair === norm) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Registra callback para eventos de desinscrição de pares.
+   * @param {Function} fn - (pair, tf) => void
+   * @returns {Function} Função de cancelamento
+   */
+  onUnsubscribe(fn) {
+    if (typeof fn !== "function") return () => {};
+    this._unsubListeners.add(fn);
+    return () => this._unsubListeners.delete(fn);
   }
 
   /**

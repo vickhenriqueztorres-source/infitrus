@@ -528,6 +528,103 @@ function showOpenB2Notice() {
   renderLogs([]);
 }
 
+let panelSelectedSymbol = null;
+
+function renderMultiAssetBar(state, allSymbols = [], currentSelected) {
+  const barEl = document.getElementById("multi-asset-bar");
+  const pillsEl = document.getElementById("multi-asset-pills");
+  if (!barEl || !pillsEl) return;
+
+  if (!allSymbols || allSymbols.length <= 1) {
+    barEl.style.display = "none";
+    return;
+  }
+
+  barEl.style.display = "flex";
+  pillsEl.innerHTML = "";
+
+  allSymbols.forEach((sym) => {
+    const symData = state.symbols?.[sym] || {};
+    const isActive = sym === currentSelected;
+    const action = symData.action || symData.lifecycle?.current?.direction || "WAIT";
+    const phase = symData.lifecycle?.trade?.phase || symData.lifecycle?.current?.phase || "SCANNING";
+    const hasSignal = phase === "PRE_SIGNAL" || phase === "ENTRY_NOW" || phase === "IN_TRADE";
+
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = `asset-pill ${isActive ? "is-active" : ""}`;
+
+    const dot = document.createElement("span");
+    dot.className = `pill-dot ${action === "CALL" ? "call" : action === "PUT" ? "put" : ""}`;
+    if (hasSignal) dot.classList.add("pulse");
+
+    const label = document.createElement("span");
+    label.textContent = sym;
+
+    pill.appendChild(dot);
+    pill.appendChild(label);
+
+    if (hasSignal && action !== "WAIT") {
+      const tag = document.createElement("small");
+      tag.style.fontSize = "8px";
+      tag.style.fontWeight = "800";
+      tag.style.marginLeft = "3px";
+      tag.textContent = action;
+      pill.appendChild(tag);
+    }
+
+    pill.addEventListener("click", () => {
+      panelSelectedSymbol = sym;
+      sendToBoundTab({ type: "ORACLE_SELECT_SYMBOL", symbol: sym });
+      refreshWindowState();
+    });
+
+    pillsEl.appendChild(pill);
+  });
+}
+
+function renderCrossAssetAlert(state, currentSelected) {
+  const alertEl = document.getElementById("cross-asset-alert");
+  const msgEl = document.getElementById("cross-asset-msg");
+  const btnEl = document.getElementById("cross-asset-btn");
+  if (!alertEl || !msgEl || !btnEl) return;
+
+  if (!state.symbols) {
+    alertEl.style.display = "none";
+    return;
+  }
+
+  let alertAsset = null;
+  let alertAction = null;
+  let alertProb = null;
+
+  for (const [sym, data] of Object.entries(state.symbols)) {
+    if (sym === currentSelected) continue;
+    const phase = data.lifecycle?.trade?.phase || data.lifecycle?.current?.phase;
+    const action = data.action || data.lifecycle?.current?.direction;
+    if ((phase === "PRE_SIGNAL" || phase === "ENTRY_NOW") && (action === "CALL" || action === "PUT")) {
+      alertAsset = sym;
+      alertAction = action;
+      alertProb = data.quantProbability ? Math.round(data.quantProbability * 100) : null;
+      break;
+    }
+  }
+
+  if (alertAsset) {
+    alertEl.style.display = "flex";
+    alertEl.className = `cross-asset-alert ${alertAction === "CALL" ? "call" : "put"}`;
+    msgEl.textContent = `⚡ Señal en ${alertAsset}: ${alertAction} ${alertProb ? `(${alertProb}%)` : ""}`;
+    btnEl.textContent = `Ver ${alertAsset}`;
+    btnEl.onclick = () => {
+      panelSelectedSymbol = alertAsset;
+      sendToBoundTab({ type: "ORACLE_SELECT_SYMBOL", symbol: alertAsset });
+      refreshWindowState();
+    };
+  } else {
+    alertEl.style.display = "none";
+  }
+}
+
 /**
  * Renderiza o estado com afinidade estrita à aba e janela vinculadas
  */
@@ -540,7 +637,21 @@ function renderState(state = null, signals = [], logs = []) {
       return;
     }
 
-    const displayData = state;
+    // Suporte Multi-Chart: identifica símbolos ativos e o ativo selecionado
+    const allSymbols = state.allSymbols || (state.symbols ? Object.keys(state.symbols) : (state.symbol ? [state.symbol] : []));
+    if (panelSelectedSymbol && state.symbols?.[panelSelectedSymbol]) {
+      // Mantém o símbolo escolhido pelo usuário se ainda for válido
+    } else {
+      panelSelectedSymbol = state.selectedSymbol || state.symbol || allSymbols[0] || null;
+    }
+
+    // Dados a serem exibidos no painel principal
+    const displayData = (panelSelectedSymbol && state.symbols?.[panelSelectedSymbol])
+      ? { ...state.symbols[panelSelectedSymbol], clockOffsetMs: state.clockOffsetMs }
+      : state;
+
+    renderMultiAssetBar(state, allSymbols, panelSelectedSymbol);
+    renderCrossAssetAlert(state, panelSelectedSymbol);
 
     // Sincroniza o relógio de mercado com o offset recebido
     if (displayData.clockOffsetMs !== undefined) {

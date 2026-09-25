@@ -193,28 +193,34 @@ export class MarketAnalyzer {
     this.currentLifecycleSnapshot = null;
     this.panel = null;
 
-    // UMA fonte de verdade para o par ativo: SOMENTE activeChannel (subscribe/unsubscribe capturado do WebSocket)
+    // Rastreamento Multi-Ativo: activeChannel registra canais abertos pelo WebSocket
     this._unsubChannel = this.activeChannel.onChange((next, prev) => {
       rec("CHANNEL_CHANGE", {
         prev: prev ? { pair: prev.pair, tf: prev.tf } : null,
         next: next ? { pair: next.pair, tf: next.tf } : null,
         origem: "WS_CHANNEL_EVENT",
       });
-      if (prev && prev.pair && (!next || next.pair !== prev.pair)) {
-        this.lifecycle.cancelPair(prev.pair, "ASSET_CHANGED");
-        this.activeSymbols.delete(prev.pair);
-      }
       if (next && next.pair) {
-        this.currentSymbol = next.pair;
+        if (!this.currentSymbol) {
+          this.currentSymbol = next.pair;
+        }
         this.timeframeSeconds = next.tf || 60;
-        this.activeSymbols.clear();
         this.activeSymbols.add(next.pair);
         logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
-      } else {
-        this.currentSymbol = null;
       }
       this.updatePanelDisplay();
     });
+
+    if (this.activeChannel.onUnsubscribe) {
+      this._unsubChannelClose = this.activeChannel.onUnsubscribe((pair) => {
+        this.lifecycle.cancelPair(pair, "UNSUBSCRIBED");
+        this.activeSymbols.delete(pair);
+        if (this.currentSymbol === pair) {
+          this.currentSymbol = Array.from(this.activeSymbols)[0] || null;
+        }
+        this.updatePanelDisplay();
+      });
+    }
 
     // Conexão dos Eventos do SignalLifecycle (Único ponto com efeitos colaterais de sinal)
     this._unsubLifecycle = this.lifecycle.onEvent((event, lc) => {
@@ -489,11 +495,44 @@ export class MarketAnalyzer {
         if (msg && msg.type === "ORACLE_IDLE_STATE_CHANGE") {
           this.handleIdleStateChange(msg.state);
         }
+        if (msg && msg.type === "ORACLE_SELECT_SYMBOL" && msg.symbol) {
+          this.selectSymbol(msg.symbol);
+        }
       });
     }
 
+    // 4. Detecção passiva de clique em gráficos no Traderoom (foco multi-gráfico automático)
+    if (typeof document !== "undefined" && document.addEventListener) {
+      this._onDomClick = (e) => {
+        if (this._isDestroyed) return;
+        try {
+          const target = e.target;
+          if (!target) return;
+          const chartOrTab = target.closest('[data-symbol], [class*="pane-legend"], [class*="asset-tab"], [class*="chart-container"], [class*="tv-chart"]');
+          if (chartOrTab) {
+            const symFromAttr = chartOrTab.getAttribute("data-symbol");
+            const symFromText = chartOrTab.textContent ? /^([A-Z0-9_]{3,})/i.exec(chartOrTab.textContent.trim())?.[1] : null;
+            const foundSym = (symFromAttr || symFromText || "").toUpperCase();
+            if (foundSym && this.activeSymbols.has(foundSym) && foundSym !== this.currentSymbol) {
+              this.selectSymbol(foundSym);
+            }
+          }
+        } catch (_) {}
+      };
+      document.addEventListener("click", this._onDomClick, { passive: true });
+    }
+
     const host = typeof window !== "undefined" ? window.location.hostname : "local";
-    logger.info("SISTEMA", `Analyzer ativo em iframe gráfico de cálculo (${host})`);
+    logger.info("SISTEMA", `Analyzer ativo em frame de cálculo (${host})`);
+  }
+
+  selectSymbol(symbol) {
+    if (!symbol) return;
+    const clean = String(symbol).trim().toUpperCase();
+    this.currentSymbol = clean;
+    this.activeSymbols.add(clean);
+    logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
+    this.updatePanelDisplay({ immediate: true });
   }
 
   _claimCompute() {
@@ -534,9 +573,17 @@ export class MarketAnalyzer {
       try { this._unsubChannel(); } catch (_) {}
       this._unsubChannel = null;
     }
+    if (this._unsubChannelClose) {
+      try { this._unsubChannelClose(); } catch (_) {}
+      this._unsubChannelClose = null;
+    }
     if (this._unsubLifecycle) {
       try { this._unsubLifecycle(); } catch (_) {}
       this._unsubLifecycle = null;
+    }
+    if (this._onDomClick && typeof document !== "undefined" && document.removeEventListener) {
+      try { document.removeEventListener("click", this._onDomClick); } catch (_) {}
+      this._onDomClick = null;
     }
     if (this._staleInterval) clearInterval(this._staleInterval);
     if (this._lifecycleInterval) clearInterval(this._lifecycleInterval);
@@ -628,57 +675,66 @@ export class MarketAnalyzer {
   tickLifecycle({ nowSec = null, decide = null, dataOk = null } = {}) {
     if (this._isDestroyed) return null;
 
+    const currentNowSec = nowSec ?? marketClock.nowSec();
     const active = this.activeChannel.get();
-    const pair = active?.pair || this.currentSymbol;
+    const mainPair = active?.pair || this.currentSymbol;
     const tf = active?.tf || this.timeframeSeconds;
 
-    if (!pair) {
+    const symbolsToStep = new Set(this.activeSymbols);
+    if (mainPair) symbolsToStep.add(mainPair);
+
+    if (symbolsToStep.size === 0) {
       this.currentLifecycleSnapshot = { status: "WAITING_CHANNEL", pair: null, tf };
       return this.currentLifecycleSnapshot;
     }
 
-    if (tf !== LIFECYCLE.SUPPORTED_TF_SEC) {
-      this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair, tf };
-      return this.currentLifecycleSnapshot;
+    let mainSnapshot = null;
+
+    for (const pair of symbolsToStep) {
+      if (tf !== LIFECYCLE.SUPPORTED_TF_SEC) {
+        continue;
+      }
+
+      let currentDataOk = dataOk;
+      if (currentDataOk === null) {
+        const report = this.quality.getReport(pair, tf);
+        const isReady = this.store.isReady(pair, tf);
+        currentDataOk = isReady && report.state === MarketState.READY;
+      }
+
+      const prevPhase = (pair === this.currentSymbol && this.currentLifecycleSnapshot)
+        ? (this.currentLifecycleSnapshot?.trade?.phase || this.currentLifecycleSnapshot?.current?.phase || "SCANNING")
+        : "SCANNING";
+
+      const decideFn = decide ?? null;
+
+      const snapshot = this.lifecycle.step({
+        pair,
+        tf,
+        nowSec: currentNowSec,
+        dataOk: currentDataOk,
+        decide: decideFn,
+      });
+
+      if (pair === this.currentSymbol || !mainSnapshot) {
+        mainSnapshot = snapshot;
+        const nextPhase = snapshot?.trade?.phase || snapshot?.current?.phase || "SCANNING";
+        const secInCandle = Math.floor(currentNowSec % 60);
+        rec("LIFECYCLE_STEP", {
+          par: pair,
+          targetTs: snapshot?.targetTs || snapshot?.current?.targetTs || snapshot?.trade?.targetTs || null,
+          secondInCandle: secInCandle,
+          phaseBefore: prevPhase,
+          phaseAfter: nextPhase,
+          direction: snapshot?.current?.direction || snapshot?.trade?.direction || null,
+          dataOk: currentDataOk,
+          remaining: 60 - secInCandle,
+        });
+      }
     }
 
-    const currentNowSec = nowSec ?? marketClock.nowSec();
-    let currentDataOk = dataOk;
-    if (currentDataOk === null) {
-      const report = this.quality.getReport(pair, tf);
-      const isReady = this.store.isReady(pair, tf);
-      currentDataOk = isReady && report.state === MarketState.READY;
-    }
-
-    const prevPhase = this.currentLifecycleSnapshot?.trade?.phase || this.currentLifecycleSnapshot?.current?.phase || "SCANNING";
-
-    // A avaliação agora ocorre ESTRITAMENTE em candle fechado via _evaluateOnClosedCandle.
-    // decideFn só é invocado se decide for explicitamente fornecido (ex: testes com mocks).
-    const decideFn = decide ?? null;
-
-    const snapshot = this.lifecycle.step({
-      pair,
-      tf,
-      nowSec: currentNowSec,
-      dataOk: currentDataOk,
-      decide: decideFn,
-    });
-
-    const nextPhase = snapshot?.trade?.phase || snapshot?.current?.phase || "SCANNING";
-    const secInCandle = Math.floor(currentNowSec % 60);
-    rec("LIFECYCLE_STEP", {
-      par: pair,
-      targetTs: snapshot?.targetTs || snapshot?.current?.targetTs || snapshot?.trade?.targetTs || null,
-      secondInCandle: secInCandle,
-      phaseBefore: prevPhase,
-      phaseAfter: nextPhase,
-      direction: snapshot?.current?.direction || snapshot?.trade?.direction || null,
-      dataOk: currentDataOk,
-      remaining: 60 - secInCandle,
-    });
-
-    this.currentLifecycleSnapshot = snapshot;
-    return snapshot;
+    this.currentLifecycleSnapshot = mainSnapshot;
+    return mainSnapshot;
   }
 
   handleSocketStatus(info) {
@@ -785,14 +841,14 @@ export class MarketAnalyzer {
     const activePair = active?.pair || null;
     const activeTf = active?.tf || this.timeframeSeconds || 60;
 
-    // Se o canal não chegar em 20s após o primeiro tick, log WARN 'canal subscribe não capturado' — NÃO adote par.
-    if (!activePair && !this._warnedNoChannel && (Date.now() - this._firstTickAt >= 20000)) {
+    // Se o canal não chegar em 20s após o primeiro tick e nenhum símbolo foi adotado, log WARN
+    if (!activePair && !this.currentSymbol && !this._warnedNoChannel && (Date.now() - this._firstTickAt >= 20000)) {
       this._warnedNoChannel = true;
       logger.warn("CANAL", "canal subscribe não capturado");
     }
 
     const extractedSym = extractSymbolFromPayload(payload);
-    const incomingSym = extractedSym || activePair || "";
+    const incomingSym = extractedSym || activePair || this.currentSymbol || "";
 
     const candles = normalizeWebSocketPayload(payload, activeTf, { symbol: incomingSym });
     if (!candles || candles.length === 0) return;
@@ -804,6 +860,7 @@ export class MarketAnalyzer {
       }
 
       const candleSym = candle.symbol || incomingSym;
+      if (!candleSym) continue;
 
       // Idempotência contra backlog de ticks (R2):
       // Ticks com timestamp <= último candle fechado+frozen são IGNORADOS
@@ -843,7 +900,19 @@ export class MarketAnalyzer {
         continue;
       }
 
-      if (this._syncingBacklog && candleSym === activePair) {
+      const isSubscribed = Boolean(this.activeChannel.hasPair(candleSym) || (activePair === candleSym));
+      if (!isSubscribed) {
+        // Ticks de watchlist/background sem canal aberto: apenas armazenados no store para warm-up
+        continue;
+      }
+
+      this.activeSymbols.add(candleSym);
+      if (!this.currentSymbol) {
+        this.currentSymbol = candleSym;
+        logger.setContext({ symbol: this.currentSymbol, tabId: this.tabId });
+      }
+
+      if (this._syncingBacklog && candleSym === this.currentSymbol) {
         this._backlogCount++;
         const currentSec = marketClock.nowSec();
         const candleAge = currentSec - candle.timestamp;
@@ -852,68 +921,58 @@ export class MarketAnalyzer {
           rec("BACKLOG_PROCESS", {
             count: this._backlogCount,
             delayMs,
-            symbol: activePair,
+            symbol: this.currentSymbol,
           });
           this._syncingBacklog = false;
           this._backlogCount = 0;
         }
       }
 
-      // Se activeChannel.get() for null, NÃO rode lifecycle nem mude currentSymbol
-      if (!activePair) {
-        continue;
-      }
-
-      // Ticks de par diferente do canal ativo: ingest no store do par deles (já feito) e mais nada!
-      if (candleSym !== activePair) {
-        continue;
-      }
-
       // Se o timeframe ativo não for M1 (60s), não gera sinal
       if (activeTf !== LIFECYCLE.SUPPORTED_TF_SEC) {
-        this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair: activePair, tf: activeTf };
+        this.currentLifecycleSnapshot = { status: "TF_NOT_SUPPORTED", pair: candleSym, tf: activeTf };
         continue;
       }
-
-      this.activeSymbols.add(activePair);
 
       // 1. Registra tick no IntraminuteTracker
       this.intraminuteTracker.recordTick(
-        activePair,
+        candleSym,
         activeTf,
         candle.close,
         candle.timestamp,
         candle.receivedAt
       );
 
-      this.quality.onRealtimeUpdate(activePair, activeTf, result);
+      this.quality.onRealtimeUpdate(candleSym, activeTf, result);
 
       this.tickLifecycle();
 
       const priceStr = candle.close.toFixed(5);
-      this.lastPrices.set(activePair, priceStr);
-      this.lastPrice = priceStr;
+      this.lastPrices.set(candleSym, priceStr);
+      if (candleSym === this.currentSymbol) {
+        this.lastPrice = priceStr;
+      }
 
       if (result.status === "NEW_CANDLE") {
-        rec("CANDLE_OPEN", { symbol: activePair, ts: candle.timestamp });
+        rec("CANDLE_OPEN", { symbol: candleSym, ts: candle.timestamp });
 
         if (activeTf === 60) {
           marketClock.observeCandleOpen(candle.timestamp, candle.receivedAt);
-          this.lifecycle.onCandleOpen(activePair, activeTf, candle.timestamp, candle.open);
+          this.lifecycle.onCandleOpen(candleSym, activeTf, candle.timestamp, candle.open);
         }
         logger.success(
           "STORE",
-          `Nova vela aberta em ${activePair}. Fechamento anterior: ${result.closedCandle?.close?.toFixed(5)}`
+          `Nova vela aberta em ${candleSym}. Fechamento anterior: ${result.closedCandle?.close?.toFixed(5)}`
         );
 
         if (result.closedCandle) {
-          rec("CANDLE_CLOSE", { symbol: activePair, ts: result.closedCandle.timestamp });
-          this.lifecycle.onCandleClose(activePair, activeTf, result.closedCandle);
-          const closedSeries = this.store.getCandles(activePair, activeTf, 150);
-          this.registry.get(activePair).observeClosedCandle(closedSeries);
+          rec("CANDLE_CLOSE", { symbol: candleSym, ts: result.closedCandle.timestamp });
+          this.lifecycle.onCandleClose(candleSym, activeTf, result.closedCandle);
+          const closedSeries = this.store.getCandles(candleSym, activeTf, 150);
+          this.registry.get(candleSym).observeClosedCandle(closedSeries);
         }
 
-        const closedSeries = this.store.getCandles(activePair, activeTf, 150);
+        const closedSeries = this.store.getCandles(candleSym, activeTf, 150);
         const settled = this.signalAuditor.auditPendingSignals(closedSeries);
         for (const s of settled) {
           const stats = this.signalAuditor.getStats();
@@ -932,19 +991,19 @@ export class MarketAnalyzer {
           }
         }
         // GATILHO ÚNICO DE DECISÃO: somente com candle fechado e dataState READY/CANDLE_CLOSED
-        await this._evaluateOnClosedCandle(activePair, activeTf, result.closedCandle, candle);
+        await this._evaluateOnClosedCandle(candleSym, activeTf, result.closedCandle, candle);
       } else if (result.status === "DATA_GAP") {
-        logger.warn("ESTADO", `Gap detectado em ${activePair}: de ${result.gapFrom} até ${result.gapTo}`);
+        logger.warn("ESTADO", `Gap detectado em ${candleSym}: de ${result.gapFrom} até ${result.gapTo}`);
       } else if (result.status === "UPDATED" || result.status === "INITIALIZED") {
         rec("DECIDE_BLOCKED", {
-          par: activePair,
+          par: candleSym,
           ts: candle.timestamp,
           closed: false,
           reason: "INTRABAR_TICK",
         });
-        if (this._lastLoggedPrices.get(activePair) !== priceStr) {
-          this._lastLoggedPrices.set(activePair, priceStr);
-          logger.info("FEED", `${activePair} tick: ${priceStr} (máx: ${candle.high.toFixed(5)}, mín: ${candle.low.toFixed(5)})`);
+        if (this._lastLoggedPrices.get(candleSym) !== priceStr) {
+          this._lastLoggedPrices.set(candleSym, priceStr);
+          logger.info("FEED", `${candleSym} tick: ${priceStr} (máx: ${candle.high.toFixed(5)}, mín: ${candle.low.toFixed(5)})`);
         }
       }
     }
@@ -1407,8 +1466,10 @@ export class MarketAnalyzer {
       ...activeObj,
       tabId: this.tabId,
       windowId: this.windowId,
-      symbol: this.currentSymbol,
-      pair: this.currentSymbol,
+      symbol: this.currentSymbol || activeObj.symbol || null,
+      pair: this.currentSymbol || activeObj.pair || null,
+      selectedSymbol: this.currentSymbol || activeObj.symbol || null,
+      activeSymbols: Array.from(this.activeSymbols.size > 0 ? this.activeSymbols : (activeObj.symbol ? [activeObj.symbol] : [])),
       domSymbol,
       tf: this.timeframeSeconds,
       status: activeObj.state || "BOOTING",
@@ -1546,27 +1607,25 @@ export class MarketAnalyzer {
   }
 }
 
-export const COMPUTE_HOSTS = ["chart.b2trading.io"];
+export const COMPUTE_HOSTS = ["chart.b2trading.io", "traderoom.b2trading.io"];
 
 export function isComputeFrame(hostname = "") {
   const host = hostname || (typeof location !== "undefined" ? location.hostname : "");
-  return host === "chart.b2trading.io";
+  if (!host) return false;
+  if (host === "chart.b2trading.io") return true;
+  if (host === "traderoom.b2trading.io") {
+    if (typeof window !== "undefined") {
+      return window.self === window.top;
+    }
+    return true;
+  }
+  return COMPUTE_HOSTS.includes(host);
 }
 
-// Inicialização automática do Analyzer no content script (exclusivo para iframe do gráfico)
+// Inicialização automática do Analyzer no content script
 if (typeof window !== "undefined") {
   const host = window.location.hostname;
   if (isComputeFrame(host)) {
     window.__oracleAnalyzer = new MarketAnalyzer();
-  } else {
-    let warned = false;
-    initBridgeListener({
-      onMarketEvent: (event) => {
-        if (!warned && event?.sourceType === "websocket") {
-          warned = true;
-          logger.warn("SISTEMA", `WS de mercado em frame não-cálculo: ${host}`);
-        }
-      },
-    });
   }
 }
