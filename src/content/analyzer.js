@@ -1631,8 +1631,10 @@ export class MarketAnalyzer {
 
       const symPrice = this.lastPrices.get(sym) || (sym === this.currentSymbol ? this.lastPrice : "---");
 
-      // Sinal visual e fase gerenciados estritamente pelo SignalLifecycle
-      const lifecycle = this.currentLifecycleSnapshot || this.lifecycle.snapshot(sym, this.timeframeSeconds, marketClock.nowSec());
+      // Sinal visual e fase gerenciados estritamente pelo SignalLifecycle com isolamento total por par
+      const lifecycle = (sym === this.currentSymbol && this.currentLifecycleSnapshot)
+        ? this.currentLifecycleSnapshot
+        : this.lifecycle.snapshot(sym, this.timeframeSeconds, marketClock.nowSec());
       const isTradeActive = lifecycle.trade && ["ENTRY_NOW", "IN_TRADE"].includes(lifecycle.trade.phase);
       const isExpiring = lifecycle.trade?.phase === "IN_TRADE" && (lifecycle.trade?.secondsRemaining ?? 60) <= 2;
 
