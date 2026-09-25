@@ -57,21 +57,21 @@ export class MicrostructureFamily {
       let pDir = null;
       let pScore = 0;
 
-      if (pressure >= 0.24 && flowImbalance >= 0) {
+      if (pressure >= 0.55 && flowImbalance >= 0.35 && tickCount >= 20) {
         pDir = "CALL";
-        pScore = 0.35 + clamp(pressure * 0.70, 0.15, 0.50) + clamp(flowImbalance * 0.30, 0, 0.15);
-      } else if (pressure <= -0.24 && flowImbalance <= 0) {
+        pScore = 0.35 + clamp(pressure * 0.70, 0.25, 0.50) + clamp(flowImbalance * 0.30, 0.10, 0.15);
+      } else if (pressure <= -0.55 && flowImbalance <= -0.35 && tickCount >= 20) {
         pDir = "PUT";
-        pScore = 0.35 + clamp(-pressure * 0.70, 0.15, 0.50) + clamp(-flowImbalance * 0.30, 0, 0.15);
+        pScore = 0.35 + clamp(-pressure * 0.70, 0.25, 0.50) + clamp(-flowImbalance * 0.30, 0.10, 0.15);
       }
 
-      if (pDir && pScore >= 0.52) {
+      if (pDir && pScore >= 0.72) {
         const rawProb = Number(clamp(0.50 + pScore * 0.20, 0.50, 0.71).toFixed(4));
         const uncert = Number(clamp(0.04 - pScore * 0.012, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "PERSISTENT_TICK_PRESSURE",
@@ -109,21 +109,21 @@ export class MicrostructureFamily {
       const dynamicForceBull = pressureVelocity * 1.6 + pressureAcceleration * 1.0;
       const dynamicForceBear = -pressureVelocity * 1.6 - pressureAcceleration * 1.0;
 
-      if (dynamicForceBull >= 0.28 && tickCount >= 10) {
+      if (dynamicForceBull >= 0.38 && tickCount >= 15) {
         accelDir = "CALL";
         accelScore = 0.35 + clamp(dynamicForceBull * 1.4, 0.15, 0.55);
-      } else if (dynamicForceBear >= 0.28 && tickCount >= 10) {
+      } else if (dynamicForceBear >= 0.38 && tickCount >= 15) {
         accelDir = "PUT";
         accelScore = 0.35 + clamp(dynamicForceBear * 1.4, 0.15, 0.55);
       }
 
-      if (accelDir && accelScore >= 0.58) {
+      if (accelDir && accelScore >= 0.65) {
         const rawProb = Number(clamp(0.50 + accelScore * 0.21, 0.50, 0.72).toFixed(4));
         const uncert = Number(clamp(0.045 - accelScore * 0.015, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "PRESSURE_ACCELERATION",
@@ -158,21 +158,21 @@ export class MicrostructureFamily {
       let revScore = 0;
 
       // Inversão: velocidade de pressão fortemente contrária à pressão acumulada prévia
-      if (pressure > 0.10 && pressureVelocity < -0.15) {
+      if (pressure > 0.25 && pressureVelocity < -0.30) {
         revDir = "PUT";
-        revScore = 0.35 + clamp(-pressureVelocity * 2.0, 0.15, 0.55);
-      } else if (pressure < -0.10 && pressureVelocity > 0.15) {
+        revScore = 0.35 + clamp(-pressureVelocity * 2.0, 0.20, 0.55);
+      } else if (pressure < -0.25 && pressureVelocity > 0.30) {
         revDir = "CALL";
-        revScore = 0.35 + clamp(pressureVelocity * 2.0, 0.15, 0.55);
+        revScore = 0.35 + clamp(pressureVelocity * 2.0, 0.20, 0.55);
       }
 
-      if (revDir && revScore >= 0.50) {
+      if (revDir && revScore >= 0.65) {
         const rawProb = Number(clamp(0.50 + revScore * 0.20, 0.50, 0.70).toFixed(4));
         const uncert = Number(clamp(0.045 - revScore * 0.015, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "PRESSURE_REVERSAL",
@@ -207,21 +207,21 @@ export class MicrostructureFamily {
       let accScore = 0;
 
       // Score contínuo baseado em tempo de permanência nos extremos
-      if (timeNearHighRatio >= 0.35 && timeNearHighRatio > timeNearLowRatio * 1.5) {
+      if (timeNearHighRatio >= 0.45 && timeNearHighRatio > timeNearLowRatio * 2.0) {
         accDir = "CALL";
         accScore = 0.30 + clamp(timeNearHighRatio * 0.80, 0.20, 0.60);
-      } else if (timeNearLowRatio >= 0.35 && timeNearLowRatio > timeNearHighRatio * 1.5) {
+      } else if (timeNearLowRatio >= 0.45 && timeNearLowRatio > timeNearHighRatio * 2.0) {
         accDir = "PUT";
         accScore = 0.30 + clamp(timeNearLowRatio * 0.80, 0.20, 0.60);
       }
 
-      if (accDir && accScore >= 0.50) {
+      if (accDir && accScore >= 0.60) {
         const rawProb = Number(clamp(0.50 + accScore * 0.20, 0.50, 0.70).toFixed(4));
         const uncert = Number(clamp(0.04 - accScore * 0.012, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "HIGH_LOW_ACCEPTANCE",

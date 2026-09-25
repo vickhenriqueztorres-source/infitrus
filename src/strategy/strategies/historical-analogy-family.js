@@ -27,6 +27,7 @@ export class HistoricalAnalogyFamily {
       tauDistance: 1.5,
       lambdaAge: 0.005,
       maxHistory: 200,
+      shrinkageM: 20.0,
     });
 
     this.broadKnn = new AdaptiveKnnEngine({
@@ -34,6 +35,7 @@ export class HistoricalAnalogyFamily {
       tauDistance: 3.5,
       lambdaAge: 0.008,
       maxHistory: 300,
+      shrinkageM: 25.0,
     });
 
     this.recentKnn = new AdaptiveKnnEngine({
@@ -41,6 +43,7 @@ export class HistoricalAnalogyFamily {
       tauDistance: 2.2,
       lambdaAge: 0.035, // Forte decaimento temporal
       maxHistory: 150,
+      shrinkageM: 20.0,
     });
 
     this.bayes = new HierarchicalBayesEngine(config.bayesConfig || { shrinkageM: 12 });
@@ -94,13 +97,13 @@ export class HistoricalAnalogyFamily {
     // =========================================================================
     {
       const res = this.exactKnn.evaluate({ currentVector: vec, candles });
-      if (res.effectiveN >= 5.0 && res.meanDistance < 1.5) {
+      if (res.effectiveN >= 8.0 && res.meanDistance < 1.0) {
         let dir = null;
         let pVal = 0.50;
-        if (res.probUp >= 0.65) {
+        if (res.probUp >= 0.70) {
           dir = "CALL";
           pVal = res.probUp;
-        } else if (res.probDown >= 0.65) {
+        } else if (res.probDown >= 0.70) {
           dir = "PUT";
           pVal = res.probDown;
         }
@@ -111,7 +114,7 @@ export class HistoricalAnalogyFamily {
           const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
           const edge = Number((consProb - breakeven).toFixed(4));
 
-          if (consProb > breakeven && edge >= 0.015) {
+          if (consProb > breakeven && edge >= 0.025) {
             opportunities.push({
               strategy: this.familyId,
               subStrategy: "EXACT_LOCAL_ANALOGY",
@@ -128,8 +131,8 @@ export class HistoricalAnalogyFamily {
               regimeCompatibility: regimeComp,
               evidence: { effectiveN: res.effectiveN, meanDistance: res.meanDistance },
               reasons: [
-                `Analogia estrita (5 vizinhos mais próximos)`,
-                `Consistência direcional de ${(pVal * 100).toFixed(0)}% com distância média baixa (${res.meanDistance.toFixed(2)})`,
+                `Analogia estrita (vizinhos com alta proximidade)`,
+                `Consistência direcional robusta de ${(pVal * 100).toFixed(0)}% com distância média baixa (${res.meanDistance.toFixed(2)})`,
               ],
               timestamp: c0.timestamp,
               fingerprint: `EXACT_KNN_${dir}_${c0.timestamp}`,
@@ -144,13 +147,13 @@ export class HistoricalAnalogyFamily {
     // =========================================================================
     {
       const res = this.broadKnn.evaluate({ currentVector: vec, candles });
-      if (res.effectiveN >= 10) {
+      if (res.effectiveN >= 15 && res.meanDistance < 2.0) {
         let dir = null;
         let pVal = 0.50;
-        if (res.probUp >= 0.60) {
+        if (res.probUp >= 0.68) {
           dir = "CALL";
           pVal = res.probUp;
-        } else if (res.probDown >= 0.60) {
+        } else if (res.probDown >= 0.68) {
           dir = "PUT";
           pVal = res.probDown;
         }
@@ -161,7 +164,7 @@ export class HistoricalAnalogyFamily {
           const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
           const edge = Number((consProb - breakeven).toFixed(4));
 
-          if (consProb > breakeven && edge >= 0.015) {
+          if (consProb > breakeven && edge >= 0.025) {
             opportunities.push({
               strategy: this.familyId,
               subStrategy: "BROAD_ANALOGY",
@@ -178,7 +181,7 @@ export class HistoricalAnalogyFamily {
               regimeCompatibility: regimeComp,
               evidence: { effectiveN: res.effectiveN, prob: pVal },
               reasons: [
-                `Vizinhança histórica ampla (amostra efetiva N=${res.effectiveN})`,
+                `Vizinhança histórica ampla (amostra robusta N=${res.effectiveN})`,
                 `Distribuição ponderada favorável (${(pVal * 100).toFixed(0)}%)`,
               ],
               timestamp: c0.timestamp,
@@ -194,13 +197,13 @@ export class HistoricalAnalogyFamily {
     // =========================================================================
     {
       const res = this.recentKnn.evaluate({ currentVector: vec, candles });
-      if (res.effectiveN >= 4.5) {
+      if (res.effectiveN >= 8.0 && res.meanDistance < 1.4) {
         let dir = null;
         let pVal = 0.50;
-        if (res.probUp >= 0.62) {
+        if (res.probUp >= 0.68) {
           dir = "CALL";
           pVal = res.probUp;
-        } else if (res.probDown >= 0.62) {
+        } else if (res.probDown >= 0.68) {
           dir = "PUT";
           pVal = res.probDown;
         }
@@ -211,7 +214,7 @@ export class HistoricalAnalogyFamily {
           const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
           const edge = Number((consProb - breakeven).toFixed(4));
 
-          if (consProb > breakeven && edge >= 0.015) {
+          if (consProb > breakeven && edge >= 0.025) {
             opportunities.push({
               strategy: this.familyId,
               subStrategy: "RECENT_ANALOGY",

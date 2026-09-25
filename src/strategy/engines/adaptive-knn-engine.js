@@ -22,6 +22,7 @@ export class AdaptiveKnnEngine {
     this.tauDistance = config.tauDistance || 2.5; // Largura do kernel de distância
     this.lambdaAge = config.lambdaAge || 0.015;   // Decaimento temporal por vela de idade
     this.maxHistory = config.maxHistory || 300;
+    this.shrinkageM = config.shrinkageM || 20.0;  // Moderação Bayesiana contra overfitting amostral
   }
 
   /**
@@ -60,22 +61,25 @@ export class AdaptiveKnnEngine {
       const outcomeUp = candles[i + 1].close > candles[i + 1].open ? 1 : 0;
       const age = (n - 1) - i;
 
-      // Distância aproximada baseada nas variáveis fundamentais
+      // Distância multidimensional robusta baseada em preço, momentum e proporção de corpo
       const r1Hist = Math.log(candles[i].close / Math.max(1e-6, candles[i - 1].close));
       const rangeHist = Math.max(1e-6, candles[i].high - candles[i].low);
       const closePosHist = (candles[i].close - candles[i].low) / rangeHist;
       const bodyRatioHist = Math.abs(candles[i].close - candles[i].open) / rangeHist;
+      const r5Hist = i >= 5 ? Math.log(candles[i].close / Math.max(1e-6, candles[i - 5].close)) : r1Hist * 5;
 
       const r1Curr = Math.log(candles[n - 1].close / Math.max(1e-6, candles[n - 2].close));
       const rangeCurr = Math.max(1e-6, candles[n - 1].high - candles[n - 1].low);
       const closePosCurr = (candles[n - 1].close - candles[n - 1].low) / rangeCurr;
       const bodyRatioCurr = Math.abs(candles[n - 1].close - candles[n - 1].open) / rangeCurr;
+      const r5Curr = (n - 1) >= 5 ? Math.log(candles[n - 1].close / Math.max(1e-6, candles[n - 6].close)) : r1Curr * 5;
 
       const dR1 = (r1Curr - r1Hist) * 150;
+      const dR5 = (r5Curr - r5Hist) * 80;
       const dPos = (closePosCurr - closePosHist) * 2;
       const dBody = (bodyRatioCurr - bodyRatioHist) * 2;
 
-      const dist = Math.sqrt(dR1 * dR1 + dPos * dPos + dBody * dBody);
+      const dist = Math.sqrt(dR1 * dR1 + dR5 * dR5 + dPos * dPos + dBody * dBody);
 
       // Peso dual com decaimento exponencial
       const wDist = Math.exp(-(dist * dist) / this.tauDistance);
@@ -123,7 +127,7 @@ export class AdaptiveKnnEngine {
     const meanDistance = topK.length > 0 ? sumDist / topK.length : 0;
 
     // Moderação Bayesiana robusta (Laplace/m-estimate) para contrair amostras pequenas em direção a 50%
-    const m = 6.0;
+    const m = this.shrinkageM || 20.0;
     const smoothedProbUp = (rawProbUp * effectiveN + 0.50 * m) / (effectiveN + m);
 
     const probUp = Number(clamp(smoothedProbUp, 0.20, 0.80).toFixed(4));

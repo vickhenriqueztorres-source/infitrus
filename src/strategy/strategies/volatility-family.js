@@ -106,12 +106,12 @@ export class VolatilityFamily {
       const sqReasons = [];
 
       if (wasCompressed && isExpandingNow) {
-        if (c0.close > prevHighMax && c0.close > c0.open && pressure >= -0.05) {
+        if (c0.close > prevHighMax && c0.close > c0.open && pressure >= 0.15 && closePos >= 0.68) {
           sqDir = "CALL";
           sqScore = 0.35 + clamp((rangeToAvg - 1.2) * 0.35, 0, 0.35) + clamp(closePos * 0.20, 0, 0.20) + (pressure > 0.10 ? 0.15 : 0);
           sqReasons.push(`Rompimento de squeeze para alta (${rangeToAvg.toFixed(1)}x amplitude média)`);
           sqReasons.push("Superação da máxima das últimas 3 velas com fechamento firme");
-        } else if (c0.close < prevLowMin && c0.close < c0.open && pressure <= 0.05) {
+        } else if (c0.close < prevLowMin && c0.close < c0.open && pressure <= -0.15 && closePos <= 0.32) {
           sqDir = "PUT";
           sqScore = 0.35 + clamp((rangeToAvg - 1.2) * 0.35, 0, 0.35) + clamp((1 - closePos) * 0.20, 0, 0.20) + (pressure < -0.10 ? 0.15 : 0);
           sqReasons.push(`Rompimento de squeeze para baixa (${rangeToAvg.toFixed(1)}x amplitude média)`);
@@ -119,13 +119,13 @@ export class VolatilityFamily {
         }
       }
 
-      if (sqDir && sqScore >= 0.50) {
+      if (sqDir && sqScore >= 0.65) {
         const rawProb = Number(clamp(0.50 + sqScore * 0.22, 0.50, 0.72).toFixed(4));
         const uncert = Number(clamp(0.04 - sqScore * 0.015, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "SQUEEZE_BREAKOUT",
@@ -158,22 +158,22 @@ export class VolatilityFamily {
       let expScore = 0;
 
       if (isEstablishedExpansion && rangeRatio >= 1.10) {
-        if (c0.close > c0.open && closePos >= 0.68 && upperWick <= 0.25) {
+        if (c0.close > c0.open && closePos >= 0.72 && upperWick <= 0.20 && pressure >= 0.15) {
           expDir = "CALL";
           expScore = 0.35 + clamp((vr3_20 - 1.2) * 0.3, 0, 0.30) + clamp(closePos * 0.25, 0, 0.25) + (pressure > 0.08 ? 0.15 : 0);
-        } else if (c0.close < c0.open && closePos <= 0.32 && lowerWick <= 0.25) {
+        } else if (c0.close < c0.open && closePos <= 0.28 && lowerWick <= 0.20 && pressure <= -0.15) {
           expDir = "PUT";
           expScore = 0.35 + clamp((vr3_20 - 1.2) * 0.3, 0, 0.30) + clamp((1 - closePos) * 0.25, 0, 0.25) + (pressure < -0.08 ? 0.15 : 0);
         }
       }
 
-      if (expDir && expScore >= 0.50) {
+      if (expDir && expScore >= 0.65) {
         const rawProb = Number(clamp(0.50 + expScore * 0.20, 0.50, 0.71).toFixed(4));
         const uncert = Number(clamp(0.042 - expScore * 0.015, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "EXPANSION_CONTINUATION",
@@ -204,27 +204,27 @@ export class VolatilityFamily {
     // 4C — VOLATILITY IGNITION (Início precoce de aceleração da variância)
     // =========================================================================
     {
-      const hasIgnition = pressureVel !== 0 && (Math.abs(pressureVel) >= 0.12 || Math.abs(pressureAccel) >= 0.08);
+      const hasIgnition = pressureVel !== 0 && (Math.abs(pressureVel) >= 0.20 || Math.abs(pressureAccel) >= 0.12);
       let ignDir = null;
       let ignScore = 0;
 
       if (hasIgnition) {
-        if (pressureVel > 0.10 && pressure > 0.12 && closePos >= 0.55) {
+        if (pressureVel > 0.18 && pressure > 0.20 && closePos >= 0.60) {
           ignDir = "CALL";
           ignScore = 0.35 + clamp(pressureVel * 1.5, 0, 0.30) + clamp(pressure * 0.5, 0, 0.25) + (accel > 0 ? 0.10 : 0);
-        } else if (pressureVel < -0.10 && pressure < -0.12 && closePos <= 0.45) {
+        } else if (pressureVel < -0.18 && pressure < -0.20 && closePos <= 0.40) {
           ignDir = "PUT";
           ignScore = 0.35 + clamp(-pressureVel * 1.5, 0, 0.30) + clamp(-pressure * 0.5, 0, 0.25) + (accel < 0 ? 0.10 : 0);
         }
       }
 
-      if (ignDir && ignScore >= 0.50) {
+      if (ignDir && ignScore >= 0.65) {
         const rawProb = Number(clamp(0.50 + ignScore * 0.20, 0.50, 0.70).toFixed(4));
         const uncert = Number(clamp(0.045 - ignScore * 0.015, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "VOLATILITY_IGNITION",
@@ -261,22 +261,22 @@ export class VolatilityFamily {
 
       if (isCompressed) {
         // Se o mercado está congelado em amplitude, mas o fluxo interno está empurrando claramente para um lado
-        if (pressure >= 0.22 && closePos >= 0.52) {
+        if (pressure >= 0.35 && closePos >= 0.60) {
           biasDir = "CALL";
           biasScore = 0.35 + clamp(pressure * 0.6, 0, 0.35) + clamp((closePos - 0.5) * 0.4, 0, 0.20) + (1 - vr3_20) * 0.15;
-        } else if (pressure <= -0.22 && closePos <= 0.48) {
+        } else if (pressure <= -0.35 && closePos <= 0.40) {
           biasDir = "PUT";
           biasScore = 0.35 + clamp(-pressure * 0.6, 0, 0.35) + clamp((0.5 - closePos) * 0.4, 0, 0.20) + (1 - vr3_20) * 0.15;
         }
       }
 
-      if (biasDir && biasScore >= 0.50) {
+      if (biasDir && biasScore >= 0.65) {
         const rawProb = Number(clamp(0.50 + biasScore * 0.19, 0.50, 0.69).toFixed(4));
         const uncert = Number(clamp(0.043 - biasScore * 0.012, 0.02, 0.05).toFixed(4));
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "COMPRESSION_DIRECTIONAL_BIAS",

@@ -53,6 +53,7 @@ export class ContinuationFamily {
     const closePos = featureMap.closePosition !== undefined ? featureMap.closePosition : (c0.close - c0.low) / range0;
     const upperWick = featureMap.upperWickRatio !== undefined ? featureMap.upperWickRatio : (c0.high - Math.max(c0.open, c0.close)) / range0;
     const lowerWick = featureMap.lowerWickRatio !== undefined ? featureMap.lowerWickRatio : (Math.min(c0.open, c0.close) - c0.low) / range0;
+    const bodyRatio = featureMap.bodyRatio !== undefined ? featureMap.bodyRatio : Math.abs(c0.close - c0.open) / range0;
     const dirEfficiency = featureMap.directionalEfficiency || clamp(Math.abs(c0.close - c2.open) / (range0 + range1 + 1e-6), 0, 1);
 
     const pressure = microMetrics?.pressure || 0;
@@ -101,10 +102,10 @@ export class ContinuationFamily {
         bearEv.pressure = pressure;
       }
 
-      // Exige score robusto (>= 0.60) e eficiência direcional real (>= 0.55) para evitar falso impulso
-      const impulseDir = (bullScore >= 0.60 && dirEfficiency >= 0.55 && bullScore > bearScore)
+      // Exige score robusto (>= 0.70), corpo de vela dominante (>= 0.55) e eficiência direcional real (>= 0.60) para evitar falso impulso
+      const impulseDir = (bullScore >= 0.70 && dirEfficiency >= 0.60 && bodyRatio >= 0.55 && bullScore > bearScore)
         ? "CALL"
-        : (bearScore >= 0.60 && dirEfficiency >= 0.55)
+        : (bearScore >= 0.70 && dirEfficiency >= 0.60 && bodyRatio >= 0.55)
         ? "PUT"
         : null;
       if (impulseDir) {
@@ -114,7 +115,7 @@ export class ContinuationFamily {
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "IMPULSE_CONTINUATION",
@@ -152,13 +153,13 @@ export class ContinuationFamily {
       let pScoreBull = 0;
       let pScoreBear = 0;
 
-      if (upCloses >= 2 && dirEfficiency >= 0.48 && upperWick <= 0.35) {
-        pScoreBull = 0.30 + dirEfficiency * 0.35 + (r2 > 0 ? 0.15 : 0) + (pressure > 0 ? 0.20 : 0);
-      } else if (downCloses >= 2 && dirEfficiency >= 0.48 && lowerWick <= 0.35) {
-        pScoreBear = 0.30 + dirEfficiency * 0.35 + (r2 < 0 ? 0.15 : 0) + (pressure < 0 ? 0.20 : 0);
+      if (upCloses >= 2 && dirEfficiency >= 0.58 && upperWick <= 0.30) {
+        pScoreBull = 0.30 + dirEfficiency * 0.35 + (r2 > 0 ? 0.15 : 0) + (pressure > 0.15 ? 0.20 : 0);
+      } else if (downCloses >= 2 && dirEfficiency >= 0.58 && lowerWick <= 0.30) {
+        pScoreBear = 0.30 + dirEfficiency * 0.35 + (r2 < 0 ? 0.15 : 0) + (pressure < -0.15 ? 0.20 : 0);
       }
 
-      const pDir = pScoreBull >= 0.52 ? "CALL" : pScoreBear >= 0.52 ? "PUT" : null;
+      const pDir = pScoreBull >= 0.65 ? "CALL" : pScoreBear >= 0.65 ? "PUT" : null;
       if (pDir) {
         const score = pDir === "CALL" ? pScoreBull : pScoreBear;
         const rawProb = Number(clamp(0.50 + score * 0.19, 0.50, 0.70).toFixed(4));
@@ -166,7 +167,7 @@ export class ContinuationFamily {
         const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.025) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "PERSISTENT_MOMENTUM",

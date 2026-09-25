@@ -1435,7 +1435,9 @@ export class MarketAnalyzer {
     const existingLc = this.lifecycle.byKey?.get(lcKey);
     let decision;
 
-    if (existingLc && existingLc.direction && (existingLc.phase === Phase.PRE_SIGNAL || existingLc.phase === Phase.ENTRY_NOW)) {
+    const hasPreSignal = existingLc && existingLc.direction && (existingLc.phase === Phase.PRE_SIGNAL || existingLc.phase === Phase.ENTRY_NOW);
+
+    if (hasPreSignal) {
       decision = existingLc.snapshot || {
         action: existingLc.direction,
         probability: 0.65,
@@ -1449,6 +1451,41 @@ export class MarketAnalyzer {
         this.lastCachedDecision = normalized;
       }
     } else {
+      // Regra de Isolamento Multi-Ativo: Em modo multi-ativo (mais de 1 ativo monitorado),
+      // nenhum sinal pode ser emitido na virada sem ter sido previamente aprovado pelo Governador (PRE_SIGNAL).
+      if (this.activeSymbols && this.activeSymbols.size > 1) {
+        rec("DECIDE_BLOCKED", {
+          par: pair,
+          ts: targetCandle.timestamp,
+          reason: "NO_PRE_SIGNAL_IN_MULTI_ASSET",
+        });
+        return;
+      }
+
+      // Cooldown obrigatório por ativo (mínimo de 2 velas entre sinais no mesmo par)
+      const lastTargetTs = this._lastSignalTargetTsBySymbol?.get(pair) || 0;
+      if (targetCandle.timestamp < lastTargetTs + 2 * tf) {
+        rec("DECIDE_BLOCKED", {
+          par: pair,
+          ts: targetCandle.timestamp,
+          reason: "COOLDOWN_ACTIVE",
+        });
+        return;
+      }
+
+      // Bloqueio de trade concorrente: se houver trade em andamento, não abre novo
+      const hasActiveTrade = Array.from(this.lifecycle.byKey.values()).some(
+        lc => lc.phase === Phase.IN_TRADE || (lc.phase === Phase.ENTRY_NOW && lc.targetTs === targetCandle.timestamp && lc.pair !== pair)
+      );
+      if (hasActiveTrade) {
+        rec("DECIDE_BLOCKED", {
+          par: pair,
+          ts: targetCandle.timestamp,
+          reason: "CONCURRENT_TRADE_ACTIVE",
+        });
+        return;
+      }
+
       const microMetrics = this.intraminuteTracker.getCurrentMetrics(pair, tf);
       const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
 
@@ -1470,6 +1507,18 @@ export class MarketAnalyzer {
         this.decisionsBySymbol.set(pair, normalized);
         if (pair === this.currentSymbol) {
           this.lastCachedDecision = normalized;
+        }
+      }
+
+      // Filtro Anti-Flip na virada sem pré-sinal
+      const candidateAction = decision?.action === "BUY" ? "CALL" : decision?.action === "SELL" ? "PUT" : decision?.action;
+      const lastOpposite = this._lastEmittedDirectionBySymbol?.get(pair);
+      const lastOppositeTs = this._lastEmittedTsBySymbol?.get(pair) || 0;
+      const nowWallSecCheck = marketClock.nowSec();
+      if (lastOpposite && lastOpposite !== candidateAction && (nowWallSecCheck - lastOppositeTs <= 120)) {
+        if (!decision?.isConfluence && (decision?.confluentCount || 0) < 2) {
+          rec("REVERSAL_VETO_UNCONFIRMED", { pair, action: candidateAction, prevAction: lastOpposite, deltaTs: nowWallSecCheck - lastOppositeTs });
+          return;
         }
       }
     }
@@ -1585,7 +1634,7 @@ export class MarketAnalyzer {
         await signalStore.putSignal(signalRecord);
         rec("STORAGE_TX_SUCCESS", { id: chave, seq });
 
-        // Registra imediatamente no deduplicador em memória
+        // Registra imediatamente no deduplicador em memória e nos mapas de cooldown/anti-flip
         this.deduplicator.record(chave, {
           action: direction,
           probability: decision?.probability ?? null,
@@ -1593,6 +1642,13 @@ export class MarketAnalyzer {
           late: false,
           seq,
         });
+
+        if (!this._lastSignalTargetTsBySymbol) this._lastSignalTargetTsBySymbol = new Map();
+        if (!this._lastEmittedDirectionBySymbol) this._lastEmittedDirectionBySymbol = new Map();
+        if (!this._lastEmittedTsBySymbol) this._lastEmittedTsBySymbol = new Map();
+        this._lastSignalTargetTsBySymbol.set(pair, targetCandle.timestamp);
+        this._lastEmittedDirectionBySymbol.set(pair, direction);
+        this._lastEmittedTsBySymbol.set(pair, referenceNowSec);
 
         rec("SIGNAL_EMIT", {
           chave,
