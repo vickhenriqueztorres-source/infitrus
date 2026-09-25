@@ -56,7 +56,8 @@ export function validateBridgeMessage(event, expectedSessionId = null) {
   if (
     data.type !== "ORACLE_MAIN_MARKET_EVENT" &&
     data.type !== "ORACLE_SOCKET_STATUS" &&
-    data.type !== "ORACLE_CHANNEL"
+    data.type !== "ORACLE_CHANNEL" &&
+    data.type !== "ORACLE_ACCESSORY_STATUS"
   ) {
     return { valid: false, reason: `Tipo de evento desconhecido: ${data.type}` };
   }
@@ -159,6 +160,12 @@ export function initBridgeListener(options = {}) {
         pair: data.pair,
         tf: data.tf,
         at: data.at,
+      });
+    } else if (data.type === "ORACLE_ACCESSORY_STATUS" && typeof options.onAccessoryStatus === "function") {
+      options.onAccessoryStatus({
+        type: "ACCESSORY_STATUS",
+        url: data.url,
+        status: data.status,
       });
     }
   };

@@ -29,6 +29,8 @@ let activeSignalData = null;
 let lastLifecycle = null;
 let lastRenderedSeq = null;
 let lastRenderedSignalSeq = 0;
+let latestRenderedState = null;
+let latestFormattedCardData = null;
 const playedSoundSet = new Set();
 
 function sendToBoundTab(message) {
@@ -105,6 +107,7 @@ function updateClockOnlyUI() {
   };
 
   const cardData = formatLifecycleCard(lifecycleData, nowSec);
+  latestFormattedCardData = cardData;
 
   // 1. Classes do Card e acessibilidade aria-live (assertive em ENTRY_NOW, polite no resto)
   const card = document.getElementById("signal-card");
@@ -561,7 +564,8 @@ function renderLogs(logs = []) {
     const time = document.createElement("time");
     time.textContent = String(entry.time || "").split(".")[0];
     const tag = document.createElement("b");
-    tag.textContent = `[${translateLogTag(entry.tag)}]`;
+    const tagText = translateLogTag(entry.tag);
+    tag.textContent = entry.symbol ? `[${tagText} · ${entry.symbol}]` : `[${tagText}]`;
     const message = document.createElement("span");
     message.textContent = translateLogMessage(entry.message || "");
     row.append(time, tag, message);
@@ -721,6 +725,7 @@ function renderCrossAssetAlert(state, currentSelected) {
  */
 function renderState(state = null, signals = [], logs = []) {
   try {
+    latestRenderedState = state;
     if (!state) {
       if (!isBoundTabB2) {
         showOpenB2Notice();
@@ -1111,7 +1116,11 @@ async function initSidepanel() {
     chrome.storage.local.set({ [NOTIFICATIONS_KEY]: event.target.checked });
   });
   document.getElementById("copy-logs")?.addEventListener("click", () => {
-    const text = currentLogs.map((entry) => `[${entry.time || ""}] [${translateLogTag(entry.tag)}] ${translateLogMessage(entry.message || "")}`).join("\n");
+    const text = currentLogs.map((entry) => {
+      const tagText = translateLogTag(entry.tag);
+      const tagStr = entry.symbol ? `[${tagText} · ${entry.symbol}]` : `[${tagText}]`;
+      return `[${entry.time || ""}] ${tagStr} ${translateLogMessage(entry.message || "")}`;
+    }).join("\n");
     if (text && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
   });
   document.getElementById("clear-logs")?.addEventListener("click", () => {
@@ -1140,7 +1149,34 @@ async function initSidepanel() {
   document.getElementById("btn-mark-occurrence")?.addEventListener("click", () => {
     const note = window.prompt("Descreva o que acabou de acontecer (ex: 'trocou de CALL pra PUT', '4 sinais ao mesmo tempo'):", "");
     if (note !== null) {
-      rec("USER_MARK", { note: note.trim() || "Sem descrição", at: new Date().toISOString() });
+      const activeObj = (panelSelectedSymbol && latestRenderedState?.symbols?.[panelSelectedSymbol])
+        ? latestRenderedState.symbols[panelSelectedSymbol]
+        : latestRenderedState;
+
+      const markPayload = {
+        note: note.trim() || "Sem descrição",
+        timestamp: Date.now(),
+        isoTime: new Date().toISOString(),
+        symbol: panelSelectedSymbol || activeObj?.symbol || null,
+        tabId: boundTabId,
+        windowId: boundWindowId,
+        writeSeq: latestRenderedState?.writeSeq || 0,
+        tradeCard: latestFormattedCardData?.tradeCard || null,
+        opportunityCard: latestFormattedCardData?.opportunityCard || null,
+        lifecycle: activeObj?.lifecycle || latestRenderedState?.lifecycle || null,
+        decision: activeObj?.lastDecision || latestRenderedState?.decision || null,
+        prices: activeObj?.lastPrices || null,
+        latencyMs: activeObj?.latencyMs ?? null,
+      };
+
+      rec("USER_MARK", markPayload);
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({
+          type: "USER_MARK",
+          payload: markPayload,
+        }).catch(() => {});
+      }
+
       const btn = document.getElementById("btn-mark-occurrence");
       if (btn) {
         const oldText = btn.textContent;

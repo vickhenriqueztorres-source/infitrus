@@ -262,6 +262,15 @@ export async function swBuildExportBundle() {
     } catch (_) {}
   }
 
+  const records = swGetRecords();
+  const userMarks = records.filter((r) => r.type === "USER_MARK");
+  const signalRecords = records.filter((r) =>
+    r.type === "SW_SIGNAL_RECORDED" ||
+    r.type === "SIGNAL_EMIT" ||
+    r.type === "SIGNAL_SETTLE" ||
+    r.type === "SW_SIGNAL_SETTLED"
+  );
+
   return {
     exportedAt: new Date().toISOString(),
     tWall: Date.now(),
@@ -270,11 +279,14 @@ export async function swBuildExportBundle() {
       name: manifest.name || "Inflitrus Signals",
       version: manifest.version || "0.1.0",
       manifestVersion: manifest.manifest_version || 3,
+      build: "2026.09.25-r8",
     },
     system: {
       userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "Node.js",
       recordsCount: swRingBuffer.length,
       currentSeq: swGlobalSeq,
+      userMarksCount: userMarks.length,
+      signalsCount: signalRecords.length,
     },
     tabs: tabsList.map((t) => ({
       id: t.id,
@@ -287,7 +299,9 @@ export async function swBuildExportBundle() {
       local: filterIfxKeys(storageLocal),
       session: filterIfxKeys(storageSession),
     },
-    records: swGetRecords(),
+    userMarks,
+    signalRecords,
+    records,
   };
 }
 

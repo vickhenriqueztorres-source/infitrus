@@ -51,8 +51,12 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
     };
   }
 
-  // 1. Timeframe não suportado
-  if (snapshot.status === "TF_NOT_SUPPORTED" || snapshot.phase === "TF_NOT_SUPPORTED") {
+  // 1. Timeframe não suportado (apenas M1 / 60s é suportado)
+  if (
+    snapshot.status === "TF_NOT_SUPPORTED" ||
+    snapshot.phase === "TF_NOT_SUPPORTED" ||
+    (snapshot.tf && snapshot.tf !== 60)
+  ) {
     return {
       primaryText: "Timeframe no soportado · usa M1",
       secondaryText: null,

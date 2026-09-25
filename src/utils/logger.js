@@ -46,8 +46,17 @@ export class LogManager {
       tag: tag.toUpperCase(),
       message,
       level, // 'info', 'success', 'warn', 'error'
-      symbol: meta.symbol || this.context?.symbol || null,
-      tabId: meta.tabId || this.context?.tabId || null,
+      symbol: meta.symbol !== undefined ? meta.symbol : (this.context?.symbol || null),
+      tabId: meta.tabId !== undefined ? meta.tabId : (this.context?.tabId || null),
+      timeframe: meta.timeframe || meta.tf || 60,
+      targetTs: meta.targetTs || null,
+      signalId: meta.signalId || null,
+      prevPhase: meta.prevPhase || null,
+      newPhase: meta.newPhase || null,
+      reason: meta.reason || null,
+      seq: meta.seq || null,
+      latencyMs: meta.latencyMs != null ? meta.latencyMs : null,
+      isAccessory: meta.isAccessory === true,
     };
 
     this.logs.push(entry);
@@ -88,6 +97,10 @@ export class LogManager {
   logToConsole(entry) {
     const tagStyles = {
       FEED: "color: #38BDF8; font-weight: bold;",
+      FEED_HEALTH: "color: #38BDF8; font-weight: bold;",
+      PLATFORM_ALERT: "color: #F59E0B; font-weight: bold;",
+      ACCESSORY_ENDPOINT: "color: #94A3B8; font-style: italic;",
+      QUANT_EVAL: "color: #818CF8; font-weight: bold;",
       INDICADOR: "color: #C084FC; font-weight: bold;",
       SINAL:
         entry.level === "success"
@@ -100,7 +113,9 @@ export class LogManager {
       WS: "color: #38BDF8; font-weight: bold;",
       STORE: "color: #34D399; font-weight: bold;",
       ERRO: "color: #EF4444; font-weight: bold;",
+      EXTENSION_ERROR: "color: #EF4444; font-weight: bold;",
       SISTEMA: "color: #A3E635; font-weight: bold;",
+      PERF: "color: #E879F9; font-weight: bold;",
     };
 
     const style = tagStyles[entry.tag] || "color: #38BDF8; font-weight: bold;";

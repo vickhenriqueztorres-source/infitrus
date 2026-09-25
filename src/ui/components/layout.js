@@ -156,7 +156,20 @@ export function translateLogMessage(message) {
 }
 
 export function translateLogTag(tag) {
-  const tags = { SINAL: "SEÑAL", HISTÓRICO: "HISTORIAL", ESTADO: "ESTADO", SISTEMA: "SISTEMA", INDICADOR: "INDICADOR" };
+  const tags = {
+    SINAL: "SEÑAL",
+    HISTÓRICO: "HISTORIAL",
+    ESTADO: "ESTADO",
+    SISTEMA: "SISTEMA",
+    INDICADOR: "INDICADOR",
+    FEED: "FEED",
+    FEED_HEALTH: "SALUD FEED",
+    PLATFORM_ALERT: "ALERTA BROKER",
+    ACCESSORY_ENDPOINT: "REST ACCESORIO",
+    QUANT_EVAL: "EVAL QUANT",
+    EXTENSION_ERROR: "ERROR EXT",
+    PERF: "RENDIMIENTO",
+  };
   return tags[tag] || tag || "SYS";
 }
 

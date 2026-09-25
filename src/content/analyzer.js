@@ -427,9 +427,15 @@ export class MarketAnalyzer {
     this.tabId = null;
     this.windowId = null;
 
-    // Métricas de performance e escrita no storage (P-01, P-02)
+    // Métricas de performance e escrita no storage (P-01, P-02, Etapa 8)
     this._evalDurations = [];
+    this._windowEvalsCount = 0;
+    this._closedCandleEvalsCount = 0;
+    this._statePublicationsCount = 0;
     this._storageWritesCount = 0;
+    this._costBySymbol = new Map();
+    this._lastPersistedDigest = null;
+    this._lastHeartbeatWriteTime = 0;
     this._lastPerfLogTime = Date.now();
     this._lastLightMetricsAt = 0;
     this._cachedLightMetrics = null;
@@ -493,6 +499,14 @@ export class MarketAnalyzer {
       onMarketEvent: (event) => this.handleMarketEvent(event),
       onSocketStatus: (info) => this.handleSocketStatus(info),
       onChannel: (ch) => this.activeChannel.onChannel(ch),
+      onAccessoryStatus: ({ url, status }) => {
+        logger.info("ACCESSORY_ENDPOINT", `Status de endpoint acessório (${status}) em ${url}`, {
+          isAccessory: true,
+          url,
+          status,
+          tabId: this.tabId,
+        });
+      },
     });
 
     // 1.1 Responde a pings de diagnóstico do MAIN world (oracleDebug.status())
@@ -783,9 +797,21 @@ export class MarketAnalyzer {
     }
   }
 
-  _recordEvalDuration(ms) {
+  _recordEvalDuration(ms, symbol = null, isWindow = false) {
     if (Number.isFinite(ms)) {
       this._evalDurations.push(ms);
+      if (isWindow) {
+        this._windowEvalsCount = (this._windowEvalsCount || 0) + 1;
+      } else {
+        this._closedCandleEvalsCount = (this._closedCandleEvalsCount || 0) + 1;
+      }
+      if (symbol) {
+        const entry = this._costBySymbol.get(symbol) || { totalMs: 0, count: 0, lastMs: 0 };
+        entry.totalMs += ms;
+        entry.count += 1;
+        entry.lastMs = ms;
+        this._costBySymbol.set(symbol, entry);
+      }
     }
   }
 
@@ -795,14 +821,31 @@ export class MarketAnalyzer {
       ? (this._evalDurations.reduce((a, b) => a + b, 0) / count).toFixed(2)
       : "0.00";
     const writes = this._storageWritesCount;
+    const publications = this._statePublicationsCount || 0;
+    const windowEvals = this._windowEvalsCount || 0;
+    const closedEvals = this._closedCandleEvalsCount || 0;
+
+    let costSummary = "[]";
+    if (this._costBySymbol && this._costBySymbol.size > 0) {
+      const parts = [];
+      for (const [sym, c] of this._costBySymbol.entries()) {
+        const avg = (c.totalMs / Math.max(1, c.count)).toFixed(1);
+        parts.push(`${sym}: ${avg}ms (${c.count}x)`);
+      }
+      costSummary = `[${parts.join(", ")}]`;
+    }
 
     logger.info(
       "PERF",
-      `[Métricas 60s] evaluate() médio: ${avgMs}ms (${count} execuções) | Storage writes: ${writes}/min (meta: <= 240/min)`
+      `[Métricas 60s] evaluate() médio: ${avgMs}ms (${count} execuções: ${windowEvals} janela 45-57s, ${closedEvals} vela fechada) | Publicações: ${publications} | Escritas storage: ${writes}/min (meta: <= 240/min) | Custo/ativo: ${costSummary}`
     );
 
     this._evalDurations = [];
+    this._windowEvalsCount = 0;
+    this._closedCandleEvalsCount = 0;
+    this._statePublicationsCount = 0;
     this._storageWritesCount = 0;
+    this._costBySymbol.clear();
     this._lastPerfLogTime = Date.now();
   }
 
@@ -869,6 +912,7 @@ export class MarketAnalyzer {
         const strat = this.registry.get(pair);
         if (!strat || typeof strat.evaluate !== "function") return null;
 
+        const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
         const decision = strat.evaluate({
           symbol: pair,
           timeframeSeconds: tf,
@@ -879,6 +923,8 @@ export class MarketAnalyzer {
           gapCount: 0,
           isStale: false,
         });
+        const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
+        this._recordEvalDuration(dur, pair, true);
 
         if (decision && (decision.action === "CALL" || decision.action === "PUT" || decision.action === "BUY" || decision.action === "SELL")) {
           const action = decision.action === "BUY" ? "CALL" : decision.action === "SELL" ? "PUT" : decision.action;
@@ -1338,7 +1384,7 @@ export class MarketAnalyzer {
       });
 
       const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
-      this._recordEvalDuration(dur);
+      this._recordEvalDuration(dur, pair, false);
       if (decision) {
         const normalized = { ...decision, symbol: pair };
         this.decisionsBySymbol.set(pair, normalized);
@@ -1757,6 +1803,7 @@ export class MarketAnalyzer {
 
   updatePanelDisplay({ immediate = false } = {}) {
     if (this._isDestroyed) return;
+    this._statePublicationsCount = (this._statePublicationsCount || 0) + 1;
     const stateObj = this.buildPanelData();
     if (this.panel) {
       this.panel.update(stateObj);
@@ -1785,6 +1832,30 @@ export class MarketAnalyzer {
     };
 
     const now = Date.now();
+
+    // Desacoplamento de Cronômetro vs Persistência (Etapa 8):
+    // Cria digest com símbolo, status, fase e direção do trade e da oportunidade, e último resultado
+    const currentPhase = payload?.lifecycle?.current?.phase || "NONE";
+    const currentDir = payload?.lifecycle?.current?.direction || "NONE";
+    const currentTarget = payload?.lifecycle?.current?.targetTs || 0;
+    const tradePhase = payload?.lifecycle?.trade?.phase || "NONE";
+    const tradeDir = payload?.lifecycle?.trade?.direction || "NONE";
+    const tradeTarget = payload?.lifecycle?.trade?.targetTs || 0;
+    const lastResultId = payload?.signalsHistory?.[0]?.id || "NONE";
+    const lastResultRes = payload?.signalsHistory?.[0]?.result || "NONE";
+    const currentSymbol = payload.symbol || "NONE";
+    const currentStatus = payload.status || "NONE";
+
+    const digest = `${currentSymbol}:${currentStatus}:${currentPhase}:${currentDir}:${currentTarget}:${tradePhase}:${tradeDir}:${tradeTarget}:${lastResultId}:${lastResultRes}`;
+
+    const stateChanged = this._lastPersistedDigest !== digest;
+    const heartbeatExpired = !this._lastHeartbeatWriteTime || (now - this._lastHeartbeatWriteTime >= 5000);
+
+    // Se o estado não mudou e não é imediato nem expirou o heartbeat de 5s, não regravar
+    if (!immediate && !stateChanged && !heartbeatExpired) {
+      return;
+    }
+
     if (!immediate && this._lastStateSaveTime && (now - this._lastStateSaveTime < 250)) {
       this._latestStateToSave = payload;
       if (!this._pendingStateSaveTimeout) {
@@ -1802,6 +1873,8 @@ export class MarketAnalyzer {
     }
     this._lastStateSaveTime = now;
     this._latestStateToSave = null;
+    this._lastPersistedDigest = digest;
+    this._lastHeartbeatWriteTime = now;
 
     this._writeSeq = (this._writeSeq || 0) + 1;
     payload.writeSeq = this._writeSeq;
@@ -1810,6 +1883,11 @@ export class MarketAnalyzer {
     this._logFlight("STATE_WRITE", {
       chave: sessionStateKey,
       writeSeq: this._writeSeq,
+      tabId: this.tabId,
+      symbol: payload.symbol,
+      revision: this._writeSeq,
+      phase: currentPhase,
+      tradePhase: tradePhase,
       resumo: {
         current: payload?.lifecycle?.current ? {
           phase: payload.lifecycle.current.phase,
