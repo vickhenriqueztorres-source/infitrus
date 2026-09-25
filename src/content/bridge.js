@@ -34,21 +34,17 @@ export function validateBridgeMessage(event, expectedSessionId = null) {
     return { valid: false, reason: "Mensagem vazia ou inválida" };
   }
 
-  // 1. Validação de fonte: deve ser estritamente da própria janela
-  if (event.source !== (typeof window !== "undefined" ? window : null) && event.source !== null) {
-    return { valid: false, reason: "Origem da fonte não pertence à janela local" };
+  // 1. Validação de domínio de origem: domínios autorizados da B2Trading ou localOrigin
+  const localOrigin = typeof window !== "undefined" && window.location?.origin ? window.location.origin : null;
+  const isAllowedOrigin = ALLOWED_ORIGINS.has(event.origin) || (localOrigin && event.origin === localOrigin);
+  if (!isAllowedOrigin) {
+    return { valid: false, reason: `Domínio de origem não autorizado: ${event.origin}` };
   }
 
-  // 2. Validação de domínio de origem: SOMENTE location.origin da janela (I-11) ou ALLOWED_ORIGINS em testes
-  const localOrigin = typeof window !== "undefined" && window.location?.origin ? window.location.origin : null;
-  if (localOrigin) {
-    if (event.origin !== localOrigin) {
-      return { valid: false, reason: `Domínio de origem não autorizado: ${event.origin}` };
-    }
-  } else {
-    if (!ALLOWED_ORIGINS.has(event.origin)) {
-      return { valid: false, reason: `Domínio de origem não autorizado: ${event.origin}` };
-    }
+  // 2. Validação de fonte: deve ser a própria janela ou uma iframe filha (ou origem autorizada)
+  const isLocalOrChild = (typeof window !== "undefined" && (event.source === window || event.source === null || (window.frames && Array.from(window.frames).includes(event.source))));
+  if (!isLocalOrChild && !ALLOWED_ORIGINS.has(event.origin)) {
+    return { valid: false, reason: "Origem da fonte não pertence à janela local ou iframe autorizada" };
   }
 
   const data = event.data;
@@ -130,16 +126,13 @@ export function initBridgeListener(options = {}) {
       return;
     }
 
-    const check = validateBridgeMessage(event, activeSessionId);
+    const check = validateBridgeMessage(event);
     if (!check.valid) {
       // Rejeita silenciosamente mensagens não conformes
       return;
     }
 
     const { data } = check;
-    if (!activeSessionId && data.sessionId) {
-      activeSessionId = data.sessionId;
-    }
 
     if (data.type === "ORACLE_MAIN_MARKET_EVENT" && typeof options.onMarketEvent === "function") {
       options.onMarketEvent({

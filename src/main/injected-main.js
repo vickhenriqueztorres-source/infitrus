@@ -80,25 +80,29 @@
         },
         "*"
       );
+      if (typeof window !== "undefined" && window.top && window.top !== window) {
+        window.top.postMessage({ type: "ORACLE_FLIGHT_REC", record }, "*");
+      }
     } catch (_) {}
   }
 
   function dispatchToBridge(sourceType, eventData, receivedAt = Date.now()) {
     if (!eventData || !eventData.payload) return;
     try {
-      window.postMessage(
-        {
-          type: "ORACLE_MAIN_MARKET_EVENT",
-          sessionId,
-          origin: window.location.origin,
-          receivedAt: eventData.receivedAt || receivedAt,
-          sourceType,
-          url: eventData.url,
-          meta: eventData.meta || null,
-          payload: eventData.payload,
-        },
-        window.location.origin
-      );
+      const msg = {
+        type: "ORACLE_MAIN_MARKET_EVENT",
+        sessionId,
+        origin: window.location.origin,
+        receivedAt: eventData.receivedAt || receivedAt,
+        sourceType,
+        url: eventData.url,
+        meta: eventData.meta || null,
+        payload: eventData.payload,
+      };
+      window.postMessage(msg, window.location.origin);
+      if (typeof window !== "undefined" && window.top && window.top !== window) {
+        window.top.postMessage(msg, "*");
+      }
     } catch (err) {}
   }
 
@@ -123,13 +127,24 @@
   }
 
   function extractSymbolFromWsObject(obj) {
-    if (!obj || typeof obj !== "object") return null;
-    const directCandidates = [obj.pair, obj.symbol, obj.asset, obj.ticker, obj.s, obj.instrument];
+    if (!obj) return null;
+    if (typeof obj === "string") return extractCleanSymbol(obj);
+    if (typeof obj !== "object") return null;
+
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        const sym = extractSymbolFromWsObject(item);
+        if (sym) return sym;
+      }
+      return null;
+    }
+
+    const directCandidates = [obj.pair, obj.symbol, obj.asset, obj.ticker, obj.s, obj.instrument, obj.name];
     for (const cand of directCandidates) {
       const sym = extractCleanSymbol(cand);
       if (sym) return sym;
     }
-    const topicCandidates = [obj.channel, obj.topic, obj.stream, obj.event, obj.name];
+    const topicCandidates = [obj.channel, obj.topic, obj.stream, obj.event];
     for (const topic of topicCandidates) {
       if (topic && typeof topic === "string") {
         const parts = topic.split(/[.:@/_-]/);
@@ -140,7 +155,20 @@
       }
     }
     if (obj.data && typeof obj.data === "object") {
-      return extractSymbolFromWsObject(obj.data);
+      const sym = extractSymbolFromWsObject(obj.data);
+      if (sym) return sym;
+    }
+    if (Array.isArray(obj.messages) && obj.messages.length > 0) {
+      const sym = extractSymbolFromWsObject(obj.messages);
+      if (sym) return sym;
+    }
+    if (Array.isArray(obj.bars) && obj.bars.length > 0) {
+      const sym = extractSymbolFromWsObject(obj.bars);
+      if (sym) return sym;
+    }
+    if (obj.bar && typeof obj.bar === "object") {
+      const sym = extractSymbolFromWsObject(obj.bar);
+      if (sym) return sym;
     }
     return null;
   }
@@ -151,6 +179,43 @@
   let lastWsMessageTime = 0;
   let lastParsedTick = null;
   const capturedChannels = new Map();
+
+  function dispatchChannelEvent(act, pair, tf = 60) {
+    if (!pair) return;
+    if (act === "subscribe") {
+      capturedChannels.set(pair, { tf, at: Date.now() });
+    } else {
+      capturedChannels.delete(pair);
+    }
+    const chMsg = {
+      type: "ORACLE_CHANNEL",
+      sessionId,
+      action: act,
+      pair,
+      tf,
+      at: Date.now(),
+    };
+    window.postMessage(chMsg, "*");
+    if (typeof window !== "undefined" && window.top && window.top !== window) {
+      window.top.postMessage(chMsg, "*");
+    }
+  }
+
+  // Detecção passiva do par via query param da URL do frame (ex: ?pair=ARBITRIUM_otc)
+  let currentFramePair = null;
+  try {
+    if (typeof window !== "undefined" && window.location?.search) {
+      const searchParams = new URLSearchParams(window.location.search);
+      const urlPair = searchParams.get("pair") || searchParams.get("symbol") || searchParams.get("asset");
+      if (urlPair) {
+        const clean = extractCleanSymbol(urlPair);
+        if (clean) {
+          currentFramePair = clean;
+          dispatchChannelEvent("subscribe", clean, 60);
+        }
+      }
+    }
+  } catch (_) {}
 
   // --- OBSERVADOR PASSIVO DE WEBSOCKET ---
   if (typeof window.WebSocket === "function") {
@@ -199,22 +264,7 @@
                   const parsedCh = parseChannelString(parsed.channel || parsed.topic || "");
                   const tf = parsedCh?.tf || 60;
                   const act = isUnsub ? "unsubscribe" : "subscribe";
-                  if (act === "subscribe") {
-                    capturedChannels.set(pair, { tf, at: Date.now() });
-                  } else {
-                    capturedChannels.delete(pair);
-                  }
-                  window.postMessage(
-                    {
-                      type: "ORACLE_CHANNEL",
-                      sessionId,
-                      action: act,
-                      pair,
-                      tf,
-                      at: Date.now(),
-                    },
-                    "*"
-                  );
+                  dispatchChannelEvent(act, pair, tf);
                 }
               }
             }
@@ -269,26 +319,47 @@
         if (!str.startsWith("{") && !str.startsWith("[")) return;
 
         try {
-          const parsed = JSON.parse(str);
+          let parsed = JSON.parse(str);
           if (!parsed || typeof parsed !== "object") return;
 
-          // Resumo de WS_FRAME para o Flight Recorder
+          // Socket.IO unwrap: ["quotes", { ... }] ou ["tick", { ... }]
+          let eventName = null;
+          if (Array.isArray(parsed) && parsed.length >= 2 && typeof parsed[0] === "string" && typeof parsed[1] === "object") {
+            eventName = parsed[0];
+            parsed = parsed[1];
+          }
+
+          // Extrair bar/tick do payload de forma resiliente
+          const rawTarget = (parsed.data && typeof parsed.data === "object" && !Array.isArray(parsed.data))
+            ? parsed.data
+            : ((Array.isArray(parsed.messages) && parsed.messages[0])
+                ? (parsed.messages[0].data || parsed.messages[0])
+                : parsed);
+
+          const fBar = rawTarget.bar || rawTarget.candle ||
+            (Array.isArray(rawTarget.bars) ? rawTarget.bars[0] :
+            (Array.isArray(rawTarget.candles) ? rawTarget.candles[0] :
+            (Array.isArray(rawTarget) ? rawTarget[0] : rawTarget)));
+
           const fPair = extractSymbolFromWsObject(parsed) ||
-            (parsed.bar && extractSymbolFromWsObject(parsed.bar)) ||
-            (Array.isArray(parsed) && extractSymbolFromWsObject(parsed[0])) ||
+            (fBar && extractSymbolFromWsObject(fBar)) ||
+            currentFramePair ||
             null;
-          const fChannel = parsed.channel || parsed.name || parsed.event || parsed.type || null;
-          const fBar = parsed.bar || parsed.candle || (Array.isArray(parsed.bars) ? parsed.bars[0] : (Array.isArray(parsed) ? parsed[0] : parsed));
-          const fTs = fBar?.timestamp || fBar?.time || fBar?.t || parsed.time || parsed.timestamp || parsed.t || receivedAt;
-          const fO = fBar?.open ?? fBar?.o ?? parsed.open ?? parsed.o ?? null;
-          const fH = fBar?.high ?? fBar?.h ?? parsed.high ?? parsed.h ?? null;
-          const fL = fBar?.low ?? fBar?.l ?? parsed.low ?? parsed.l ?? null;
-          const fC = fBar?.close ?? fBar?.c ?? parsed.price ?? parsed.p ?? parsed.rate ?? null;
-          const fTf = fBar?.tf || fBar?.resolution || parsed.tf || parsed.resolution || null;
+
+          const fChannel = eventName || parsed.channel || parsed.name || parsed.event || parsed.type || null;
+          const fTs = fBar?.timestamp || fBar?.time || fBar?.t || rawTarget.timestamp || rawTarget.time || rawTarget.t || parsed.time || parsed.timestamp || parsed.t || receivedAt;
+          const fO = fBar?.open ?? fBar?.o ?? rawTarget.open ?? rawTarget.o ?? parsed.open ?? parsed.o ?? null;
+          const fH = fBar?.high ?? fBar?.h ?? rawTarget.high ?? rawTarget.h ?? parsed.high ?? parsed.h ?? null;
+          const fL = fBar?.low ?? fBar?.l ?? rawTarget.low ?? rawTarget.l ?? parsed.low ?? parsed.l ?? null;
+          const fC = fBar?.close ?? fBar?.c ?? rawTarget.close ?? rawTarget.c ?? rawTarget.price ?? rawTarget.p ?? rawTarget.rate ?? parsed.price ?? parsed.p ?? parsed.rate ?? parsed.close ?? parsed.c ?? null;
+          const fTf = fBar?.tf || fBar?.resolution || rawTarget.tf || rawTarget.resolution || parsed.tf || parsed.resolution || null;
           const fClosed = fBar?.closed !== undefined ? fBar.closed : (parsed.closed !== undefined ? parsed.closed : null);
 
           if (fC !== null) {
-            lastParsedTick = { pair: fPair, price: fC, time: fTs };
+            lastParsedTick = { pair: fPair, price: Number(fC), time: fTs };
+            if (fPair && !capturedChannels.has(fPair)) {
+              dispatchChannelEvent("subscribe", fPair, fTf ? Number(fTf) : 60);
+            }
           }
 
           recMain("WS_FRAME", {
@@ -309,6 +380,7 @@
           } else if (parsed.event || parsed.name === "tick" || parsed.type === "tick") {
             isRelevant = true;
           } else if (
+            fC !== null ||
             parsed.price !== undefined ||
             parsed.p !== undefined ||
             parsed.close !== undefined ||
@@ -329,6 +401,7 @@
             dispatchToBridge("websocket", {
               url: sanitizedUrl,
               payload: sanitizedPayload,
+              meta: fPair ? { pair: fPair, tf: fTf ? Number(fTf) : 60, price: fC !== null ? Number(fC) : null, time: fTs } : null,
               receivedAt,
             }, receivedAt);
           }
@@ -339,16 +412,17 @@
         if (!isMarketWs) return;
         recMain("WS_OPEN", { url: sanitizedUrl });
         try {
-          window.postMessage(
-            {
-              type: "ORACLE_SOCKET_STATUS",
-              sessionId,
-              origin: window.location.origin,
-              status: "connected",
-              url: sanitizedUrl,
-            },
-            "*"
-          );
+          const statusMsg = {
+            type: "ORACLE_SOCKET_STATUS",
+            sessionId,
+            origin: window.location.origin,
+            status: "connected",
+            url: sanitizedUrl,
+          };
+          window.postMessage(statusMsg, "*");
+          if (typeof window !== "undefined" && window.top && window.top !== window) {
+            window.top.postMessage(statusMsg, "*");
+          }
         } catch (e) {}
       });
 
@@ -357,16 +431,17 @@
         if (!isMarketWs) return;
         recMain("WS_CLOSE", { url: sanitizedUrl });
         try {
-          window.postMessage(
-            {
-              type: "ORACLE_SOCKET_STATUS",
-              sessionId,
-              origin: window.location.origin,
-              status: "closed",
-              url: sanitizedUrl,
-            },
-            "*"
-          );
+          const statusMsg = {
+            type: "ORACLE_SOCKET_STATUS",
+            sessionId,
+            origin: window.location.origin,
+            status: "closed",
+            url: sanitizedUrl,
+          };
+          window.postMessage(statusMsg, "*");
+          if (typeof window !== "undefined" && window.top && window.top !== window) {
+            window.top.postMessage(statusMsg, "*");
+          }
         } catch (e) {}
       });
 

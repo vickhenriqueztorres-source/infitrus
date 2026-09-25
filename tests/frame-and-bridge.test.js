@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { isComputeFrame, COMPUTE_HOSTS, MarketAnalyzer } from "../src/content/analyzer.js";
+import { isComputeFrame, COMPUTE_HOSTS, MarketAnalyzer, detectActiveSymbolFromDOM, detectActiveSymbolsFromDOM } from "../src/content/analyzer.js";
 import { validateBridgeMessage } from "../src/content/bridge.js";
 
 test("isComputeFrame: Identifica chart.b2trading.io e traderoom.b2trading.io como frames de cálculo", () => {
@@ -257,6 +257,91 @@ test("MarketAnalyzer: Suporta múltiplos gráficos simultâneos (Multi-Chart) se
 
   analyzer.selectSymbol("1000SATS_OTC");
   assert.equal(analyzer.currentSymbol, "1000SATS_OTC");
+
+  analyzer.destroy();
+});
+
+test("validateBridgeMessage: Aceita mensagem vinda de iframe filha autorizada (chart.b2trading.io -> traderoom.b2trading.io)", () => {
+  const origWindow = globalThis.window;
+  try {
+    const fakeChildFrame = { name: "chart_iframe" };
+    globalThis.window = {
+      location: { origin: "https://traderoom.b2trading.io" },
+      frames: [fakeChildFrame],
+    };
+
+    const validChildEvent = {
+      source: fakeChildFrame,
+      origin: "https://chart.b2trading.io",
+      data: {
+        type: "ORACLE_MAIN_MARKET_EVENT",
+        sessionId: "sess_child_12345",
+        payload: { pair: "ARBITRIUM_OTC", close: 495.20 },
+      },
+    };
+
+    const res = validateBridgeMessage(validChildEvent);
+    assert.equal(res.valid, true, "Bridge DEVE aceitar mensagens vindas de chart.b2trading.io em traderoom.b2trading.io");
+    assert.equal(res.data.sessionId, "sess_child_12345");
+  } finally {
+    globalThis.window = origWindow;
+  }
+});
+
+test("detectActiveSymbolsFromDOM: Detecta múltiplos pares abertos em iframes de gráficos", () => {
+  const origDoc = globalThis.document;
+  try {
+    const fakeIframes = [
+      { getAttribute: () => "https://chart.b2trading.io/?pair=ARBITRIUM_otc&chart_id=1" },
+      { getAttribute: () => "https://chart.b2trading.io/?pair=1000SATS_otc&chart_id=2" },
+    ];
+    globalThis.document = {
+      title: "B2Trading Broker",
+      querySelector: () => null,
+      querySelectorAll: (sel) => {
+        if (sel.includes("iframe")) return fakeIframes;
+        return [];
+      },
+    };
+
+    const symbols = detectActiveSymbolsFromDOM();
+    assert.deepEqual(symbols.sort(), ["1000SATS_OTC", "ARBITRIUM_OTC"].sort());
+  } finally {
+    globalThis.document = origDoc;
+  }
+});
+
+test("MarketAnalyzer: Processa ticks Socket.IO em formato array com envelope aninhado", async () => {
+  const analyzer = new MarketAnalyzer();
+  analyzer.tabId = 303;
+
+  // Formato Socket.IO: ["quotes", { pair: "ARBITRIUM_OTC", messages: [{ data: { time: 1727050000000, close: 495.30 } }] }]
+  const socketIoPayload = [
+    "quotes",
+    {
+      pair: "ARBITRIUM_OTC",
+      messages: [
+        {
+          name: "tick",
+          data: {
+            time: 1727050000000,
+            open: 495.00,
+            high: 495.50,
+            low: 494.90,
+            close: 495.30,
+            volume: 10,
+          },
+        },
+      ],
+    },
+  ];
+
+  await analyzer.processRealtimePayload(socketIoPayload, { pair: "ARBITRIUM_OTC", tf: 60 });
+
+  assert.equal(analyzer.activeSymbols.has("ARBITRIUM_OTC"), true);
+  const candle = analyzer.store.getLast("ARBITRIUM_OTC", 60);
+  assert.ok(candle, "Deveria ter ingerido o candle do payload Socket.IO");
+  assert.equal(candle.close, 495.30);
 
   analyzer.destroy();
 });

@@ -143,8 +143,47 @@ export function detectActiveSymbolFromDOM() {
         }
       }
     }
+
+    // 4. Seletor de iframes com par na URL (?pair=...)
+    const iframes = document.querySelectorAll('iframe[src*="pair="]');
+    for (const iframe of iframes) {
+      const src = iframe.getAttribute("src") || iframe.src || "";
+      const match = /[?&]pair=([^&#]+)/i.exec(src);
+      if (match && match[1]) {
+        const clean = decodeURIComponent(match[1]).trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
+        if (clean.length >= 3 && clean !== "B2TRADING") {
+          return clean;
+        }
+      }
+    }
   } catch (_) {}
   return null;
+}
+
+/**
+ * Retorna todos os ativos ativos visíveis no DOM (incluindo múltiplos gráficos em iframes).
+ * @returns {string[]}
+ */
+export function detectActiveSymbolsFromDOM() {
+  if (typeof document === "undefined") return [];
+  const symbols = new Set();
+  const primary = detectActiveSymbolFromDOM();
+  if (primary) symbols.add(primary);
+
+  try {
+    const iframes = document.querySelectorAll('iframe[src*="pair="]');
+    for (const iframe of iframes) {
+      const src = iframe.getAttribute("src") || iframe.src || "";
+      const match = /[?&]pair=([^&#]+)/i.exec(src);
+      if (match && match[1]) {
+        const clean = decodeURIComponent(match[1]).trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
+        if (clean.length >= 3 && clean !== "B2TRADING") {
+          symbols.add(clean);
+        }
+      }
+    }
+  } catch (_) {}
+  return Array.from(symbols);
 }
 
 export class MarketAnalyzer {
@@ -161,6 +200,7 @@ export class MarketAnalyzer {
     this._firstTickAt = 0;
     this._warnedNoChannel = false;
     this._disconnectTimer = null;
+    this._scanInterval = null;
     this._unsubBridge = null;
     this._unsubChannel = null;
     this._unsubLifecycle = null;
@@ -570,8 +610,53 @@ export class MarketAnalyzer {
       document.addEventListener("click", this._onDomClick, { passive: true });
     }
 
+    // 5. Escaneamento contínuo de iframes para descoberta multi-gráfico
+    this._scanIframesForPairs();
+    if (typeof window !== "undefined") {
+      this._scanInterval = setInterval(() => {
+        if (this._isDestroyed) return;
+        this._scanIframesForPairs();
+      }, 3000);
+    }
+
     const host = typeof window !== "undefined" ? window.location.hostname : "local";
     logger.info("SISTEMA", `Analyzer ativo em frame de cálculo (${host})`);
+  }
+
+  _scanIframesForPairs() {
+    if (typeof document === "undefined") return [];
+    const discovered = [];
+    try {
+      const iframes = document.querySelectorAll("iframe");
+      iframes.forEach((iframe) => {
+        try {
+          const src = iframe.getAttribute("src") || iframe.src || "";
+          if (src && src.includes("pair=")) {
+            const match = /[?&]pair=([^&#]+)/i.exec(src);
+            if (match && match[1]) {
+              const pair = decodeURIComponent(match[1]).trim().toUpperCase().replace(/[^A-Z0-9_]/g, "");
+              if (pair && pair.length >= 3 && pair !== "B2TRADING") {
+                discovered.push(pair);
+                this.activeSymbols.add(pair);
+                if (!this.activeChannel.hasPair(pair)) {
+                  this.activeChannel.onChannel({
+                    type: "ORACLE_CHANNEL",
+                    action: "subscribe",
+                    pair,
+                    tf: 60,
+                    at: Date.now(),
+                  });
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      });
+    } catch (_) {}
+    if (discovered.length > 0 && !this.currentSymbol) {
+      this.selectSymbol(discovered[0]);
+    }
+    return discovered;
   }
 
   selectSymbol(symbol) {
@@ -637,6 +722,7 @@ export class MarketAnalyzer {
     if (this._lifecycleInterval) clearInterval(this._lifecycleInterval);
     if (this._perfInterval) clearInterval(this._perfInterval);
     if (this._heartbeatInterval) clearInterval(this._heartbeatInterval);
+    if (this._scanInterval) clearInterval(this._scanInterval);
     if (this._pendingStateSaveTimeout) clearTimeout(this._pendingStateSaveTimeout);
     if (this._disconnectTimer) clearTimeout(this._disconnectTimer);
 
@@ -839,7 +925,16 @@ export class MarketAnalyzer {
       }
       this.processHistoryPayload(event.payload, event.meta);
     } else {
-      this.processRealtimePayload(event.payload);
+      if (event.meta?.pair && !this.activeChannel.hasPair(event.meta.pair)) {
+        this.activeChannel.onChannel({
+          type: "ORACLE_CHANNEL",
+          action: "subscribe",
+          pair: event.meta.pair,
+          tf: event.meta.tf || 60,
+          at: Date.now(),
+        });
+      }
+      this.processRealtimePayload(event.payload, event.meta);
     }
   }
 
@@ -877,7 +972,7 @@ export class MarketAnalyzer {
     this.updatePanelDisplay();
   }
 
-  async processRealtimePayload(payload) {
+  async processRealtimePayload(payload, meta = null) {
     if (this._isDestroyed) return;
     this._lastTickReceivedAt = Date.now();
     if (!this._firstTickAt) {
@@ -894,7 +989,7 @@ export class MarketAnalyzer {
 
     const active = this.activeChannel.get();
     const activePair = active?.pair || null;
-    const activeTf = active?.tf || this.timeframeSeconds || 60;
+    const activeTf = meta?.tf || active?.tf || this.timeframeSeconds || 60;
 
     // Se o canal não chegar em 20s após o primeiro tick e nenhum símbolo foi adotado, log WARN
     if (!activePair && !this.currentSymbol && !this._warnedNoChannel && (Date.now() - this._firstTickAt >= 20000)) {
@@ -903,7 +998,7 @@ export class MarketAnalyzer {
     }
 
     const extractedSym = extractSymbolFromPayload(payload);
-    const incomingSym = extractedSym || activePair || this.currentSymbol || "";
+    const incomingSym = extractedSym || meta?.pair || activePair || this.currentSymbol || "";
 
     const candles = normalizeWebSocketPayload(payload, activeTf, { symbol: incomingSym });
     if (!candles || candles.length === 0) return;
@@ -956,10 +1051,19 @@ export class MarketAnalyzer {
       }
 
       let isSubscribed = Boolean(this.activeChannel.hasPair(candleSym) || (activePair === candleSym));
+      if (!isSubscribed && meta?.pair && meta.pair === candleSym) {
+        this.activeChannel.onChannel({
+          type: "ORACLE_CHANNEL",
+          action: "subscribe",
+          pair: candleSym,
+          tf: activeTf,
+          at: Date.now(),
+        });
+        isSubscribed = true;
+      }
       if (!isSubscribed) {
-        const domSym = detectActiveSymbolFromDOM();
-        // Se o símbolo do tick coincide com o gráfico na tela (DOM):
-        if (domSym && domSym === candleSym) {
+        const domSymbols = detectActiveSymbolsFromDOM();
+        if (domSymbols.includes(candleSym)) {
           this.activeChannel.onChannel({
             type: "ORACLE_CHANNEL",
             action: "subscribe",
@@ -1679,15 +1783,16 @@ export class MarketAnalyzer {
 export const COMPUTE_HOSTS = ["chart.b2trading.io", "traderoom.b2trading.io"];
 
 export function isComputeFrame(hostname = "") {
+  if (typeof window !== "undefined") {
+    // Apenas a janela principal (frame TOP) pode ser instância de cálculo ativa
+    if (window.self !== window.top) {
+      return false;
+    }
+  }
   const host = hostname || (typeof location !== "undefined" ? location.hostname : "");
   if (!host) return false;
   if (host === "chart.b2trading.io") return true;
-  if (host === "traderoom.b2trading.io") {
-    if (typeof window !== "undefined") {
-      return window.self === window.top;
-    }
-    return true;
-  }
+  if (host === "traderoom.b2trading.io") return true;
   return COMPUTE_HOSTS.includes(host);
 }
 
