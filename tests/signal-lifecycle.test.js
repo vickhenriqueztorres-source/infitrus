@@ -200,3 +200,24 @@ test("SignalLifecycle: g) ID único por sinal, nunca reutilizado", () => {
   assert.ok(snap2.current.id);
   assert.notEqual(snap1.current.id, snap2.current.id, "Cada ciclo deve ter ID único e estrito");
 });
+
+test("SignalLifecycle: h) Imutabilidade de direção confirmada na virada da vela com emitSignal", () => {
+  const lc = new SignalLifecycle();
+  const pair = "EURUSD";
+  const tf = 60;
+  const baseTs = 1727010000;
+
+  // Pré-sinal emitido aos 52s para a vela baseTs + 60
+  lc.step({
+    pair,
+    tf,
+    nowSec: baseTs + 52,
+    dataOk: true,
+    decide: () => ({ action: "CALL", probability: 0.65 }),
+  });
+
+  // Na virada da vela (targetTs = baseTs + 60), emitSignal com PUT NÃO inverte a direção
+  const emitted = lc.emitSignal(pair, tf, baseTs + 60, { action: "PUT", probability: 0.70 });
+  assert.equal(emitted.direction, "CALL", "Direção travada no pré-sinal não pode sofrer repinte no fechamento");
+});
+

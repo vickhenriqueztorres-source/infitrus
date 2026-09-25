@@ -847,7 +847,47 @@ export class MarketAnalyzer {
         ? (this.currentLifecycleSnapshot?.trade?.phase || this.currentLifecycleSnapshot?.current?.phase || "SCANNING")
         : "SCANNING";
 
-      const decideFn = decide ?? null;
+      const decideFn = decide ?? (() => {
+        const secInCandle = Math.floor(currentNowSec % 60);
+        // Avalia apenas dentro da janela de decisão (45s a 57s)
+        if (secInCandle < (this.lifecycle?.cfg?.DECISION_START_SEC ?? 45) ||
+            secInCandle > (this.lifecycle?.cfg?.DECISION_END_SEC ?? 57)) {
+          return null;
+        }
+
+        const candles = this.store.getCandles(pair, tf, 150);
+        if (!candles || candles.length < 15) return null;
+
+        const microMetrics = this.intraminuteTracker ? this.intraminuteTracker.getCurrentMetrics(pair, tf) : null;
+        const report = this.quality ? this.quality.getReport(pair, tf) : { state: MarketState.READY };
+        const isReady = this.store.isReady(pair, tf);
+        const dataState = (isReady && report.state === MarketState.READY) ? "READY" : (report.state || "NOT_READY");
+        if (!["READY", "CANDLE_CLOSED"].includes(dataState)) return null;
+
+        const strat = this.registry.get(pair);
+        if (!strat || typeof strat.evaluate !== "function") return null;
+
+        const decision = strat.evaluate({
+          symbol: pair,
+          timeframeSeconds: tf,
+          candles,
+          microMetrics,
+          isReady: true,
+          dataState,
+          gapCount: 0,
+          isStale: false,
+        });
+
+        if (decision && (decision.action === "CALL" || decision.action === "PUT" || decision.action === "BUY" || decision.action === "SELL")) {
+          const action = decision.action === "BUY" ? "CALL" : decision.action === "SELL" ? "PUT" : decision.action;
+          const normalizedDecision = { ...decision, action, symbol: pair };
+          if (pair === this.currentSymbol) {
+            this.lastCachedDecision = normalizedDecision;
+          }
+          return normalizedDecision;
+        }
+        return null;
+      });
 
       const snapshot = this.lifecycle.step({
         pair,
@@ -1251,31 +1291,53 @@ export class MarketAnalyzer {
       return;
     }
 
-    // 4. Executa avaliação puramente sobre a série fechada
-    const closedCandles = this.store.getCandles(pair, tf, 150);
-    const microMetrics = this.intraminuteTracker.getCurrentMetrics(pair, tf);
-    const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-
-    const decision = this.registry.get(pair).evaluate({
-      symbol: pair,
-      timeframeSeconds: tf,
-      candles: closedCandles,
-      microMetrics,
-      isReady: true,
-      dataState,
-      gapCount: 0,
-      isStale: false,
-    });
-
-    const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
-    this._recordEvalDuration(dur);
-
     const candleCloseTime = closedCandle.timestamp + tf;
     const targetCandle = newCandle || {
       timestamp: candleCloseTime,
       open: closedCandle.close,
       receivedAt: Date.now(),
     };
+
+    // 4. Executa avaliação ou reutiliza pré-sinal travado
+    // Se o SignalLifecycle já gerou PRE_SIGNAL ou ENTRY_NOW para esta vela-alvo,
+    // reutiliza a decisão travada garantindo 100% de coerência e ZERO repinte entre 52s e 00s.
+    const closedCandles = this.store.getCandles(pair, tf, 150);
+    const lcKey = this.lifecycle._key ? this.lifecycle._key(pair, tf, targetCandle.timestamp) : `${pair}:${tf}:${targetCandle.timestamp}`;
+    const existingLc = this.lifecycle.byKey?.get(lcKey);
+    let decision;
+
+    if (existingLc && existingLc.direction && (existingLc.phase === Phase.PRE_SIGNAL || existingLc.phase === Phase.ENTRY_NOW)) {
+      decision = existingLc.snapshot || {
+        action: existingLc.direction,
+        probability: 0.65,
+        subStrategy: "QUANT_CONSENSUS",
+        reasons: ["Direção pré-sinal confirmada na virada da vela"],
+      };
+      if (!decision.action) decision.action = existingLc.direction;
+      if (pair === this.currentSymbol) {
+        this.lastCachedDecision = { ...decision, symbol: pair };
+      }
+    } else {
+      const microMetrics = this.intraminuteTracker.getCurrentMetrics(pair, tf);
+      const t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+
+      decision = this.registry.get(pair).evaluate({
+        symbol: pair,
+        timeframeSeconds: tf,
+        candles: closedCandles,
+        microMetrics,
+        isReady: true,
+        dataState,
+        gapCount: 0,
+        isStale: false,
+      });
+
+      const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
+      this._recordEvalDuration(dur);
+      if (pair === this.currentSymbol && decision) {
+        this.lastCachedDecision = { ...decision, symbol: pair };
+      }
+    }
     const nowWallSec = marketClock.nowSec();
     // Se o timestamp for contemporâneo ao relógio de parede (< 24h), usa marketClock.
     // Em replays/testes com timestamps históricos simulados, usa targetCandle.timestamp.
@@ -1571,15 +1633,21 @@ export class MarketAnalyzer {
 
       // Sinal visual e fase gerenciados estritamente pelo SignalLifecycle
       const lifecycle = this.currentLifecycleSnapshot || this.lifecycle.snapshot(sym, this.timeframeSeconds, marketClock.nowSec());
-      const activeItem = (lifecycle.trade && ["ENTRY_NOW", "IN_TRADE"].includes(lifecycle.trade.phase))
-        ? lifecycle.trade
-        : (lifecycle.current && lifecycle.current.phase === Phase.PRE_SIGNAL)
-          ? lifecycle.current
-          : null;
+      const isTradeActive = lifecycle.trade && ["ENTRY_NOW", "IN_TRADE"].includes(lifecycle.trade.phase);
+      const isExpiring = lifecycle.trade?.phase === "IN_TRADE" && (lifecycle.trade?.secondsRemaining ?? 60) <= 2;
+
+      // PRE_SIGNAL tem prioridade visual máxima para alertar a direção da próxima vela com antecedência
+      const activeItem = (lifecycle.current && lifecycle.current.phase === Phase.PRE_SIGNAL)
+        ? lifecycle.current
+        : (isTradeActive ? lifecycle.trade : null);
 
       const displayAction = activeItem?.direction || "WAIT";
       const displayLabel = activeItem
-        ? (activeItem.phase === Phase.ENTRY_NOW ? "ENTRA AHORA" : activeItem.phase === Phase.IN_TRADE ? "EN OPERACIÓN" : "PRE-SEÑAL")
+        ? (activeItem.phase === Phase.ENTRY_NOW
+            ? "ENTRA AHORA"
+            : activeItem.phase === Phase.IN_TRADE
+              ? (isExpiring ? "EXPIRANDO" : "EN OPERACIÓN")
+              : "PRE-SEÑAL")
         : "ESCANEANDO";
 
       symbolsMap[sym] = {

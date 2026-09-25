@@ -113,14 +113,30 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
         ? `Entrada: ${Number(trade.entryPrice).toFixed(5)}`
         : (inTradeSecondary || "Operación en curso en el broker");
 
+      const isExpiring = remTrade <= 2 && remTrade > 0;
+      const isExpired = remTrade <= 0;
+
+      let primaryText;
+      let badgeText;
+      if (isExpired) {
+        primaryText = `OPERACIÓN EXPIRADA · expira en 0s (esperando resultado)`;
+        badgeText = `EXPIRADO · ${dir}`;
+      } else if (isExpiring) {
+        primaryText = `FINALIZANDO OPERACIÓN — ${dirSymbol} · expira en ${remTrade}s`;
+        badgeText = `EXPIRANDO · ${dir}`;
+      } else {
+        primaryText = `OPERACIÓN EN CURSO — ${dirSymbol} · expira en ${remTrade}s`;
+        badgeText = `EN OPERACIÓN · ${dir}`;
+      }
+
       return {
-        primaryText: `OPERACIÓN EN CURSO — ${dirSymbol} · expira en ${remTrade}s`,
-        secondaryText: entryText,
+        primaryText,
+        secondaryText: isExpired ? "Aguardando confirmación de vela cerrada..." : entryText,
         phase: "IN_TRADE",
         direction: dir,
         secondsRemaining: remTrade,
         progressPct: inTradeProgress,
-        badgeText: `EN OPERACIÓN · ${dir}`,
+        badgeText,
         badgeClass: dir === "CALL" ? "call" : "put",
         ariaLive: "polite",
         ariaLabel: `en operación ${dir}, expira en ${remTrade} segundos`,

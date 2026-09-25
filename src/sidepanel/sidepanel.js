@@ -180,7 +180,11 @@ function updateClockOnlyUI() {
     } else if (cardData.phase === "PRE_SIGNAL") {
       timingLabel.innerHTML = `AL SEGUNDO :00 DE LA PRÓXIMA VELA (en ${cardData.secondsRemaining}s)`;
     } else if (cardData.phase === "IN_TRADE") {
-      timingLabel.innerHTML = `<span style="font-weight:700">OPERACIÓN EN CURSO (${cardData.secondsRemaining}s para expirar)</span>`;
+      if (cardData.secondsRemaining <= 2) {
+        timingLabel.innerHTML = `<span style="font-weight:700;color:#F59E0B">FINALIZANDO OPERACIÓN (${cardData.secondsRemaining}s)</span>`;
+      } else {
+        timingLabel.innerHTML = `<span style="font-weight:700">OPERACIÓN EN CURSO (${cardData.secondsRemaining}s para expirar)</span>`;
+      }
     } else if (cardData.phase === "SETTLED") {
       timingLabel.innerHTML = `OPERACIÓN LIQUIDADA (${cardData.badgeText})`;
     } else {
@@ -546,9 +550,15 @@ function renderMultiAssetBar(state, allSymbols = [], currentSelected) {
   allSymbols.forEach((sym) => {
     const symData = state.symbols?.[sym] || {};
     const isActive = sym === currentSelected;
-    const action = symData.action || symData.lifecycle?.current?.direction || "WAIT";
-    const phase = symData.lifecycle?.trade?.phase || symData.lifecycle?.current?.phase || "SCANNING";
-    const hasSignal = phase === "PRE_SIGNAL" || phase === "ENTRY_NOW" || phase === "IN_TRADE";
+    const isTradeActive = symData.lifecycle?.trade?.phase === "IN_TRADE" || symData.lifecycle?.trade?.phase === "ENTRY_NOW";
+    const tradeDir = symData.lifecycle?.trade?.direction;
+    const preSigDir = symData.lifecycle?.current?.phase === "PRE_SIGNAL" ? symData.lifecycle?.current?.direction : null;
+    const action = preSigDir || symData.action || (isTradeActive ? tradeDir : symData.lifecycle?.current?.direction) || "WAIT";
+    const phase = symData.lifecycle?.current?.phase === "PRE_SIGNAL"
+      ? "PRE_SIGNAL"
+      : (symData.lifecycle?.trade?.phase || symData.lifecycle?.current?.phase || "SCANNING");
+    const isExpiring = phase === "IN_TRADE" && (symData.lifecycle?.trade?.secondsRemaining ?? 60) <= 2;
+    const hasSignal = phase === "PRE_SIGNAL" || phase === "ENTRY_NOW" || (phase === "IN_TRADE" && !isExpiring);
 
     const pill = document.createElement("button");
     pill.type = "button";

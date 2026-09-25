@@ -279,3 +279,53 @@ test("formatLifecycleCard: TF_NOT_SUPPORTED avisa que só suporta M1", () => {
   assert.equal(card.phase, "TF_NOT_SUPPORTED");
   assert.equal(card.primaryText, "Timeframe no soportado · usa M1");
 });
+
+test("formatLifecycleCard: IN_TRADE nos segundos finais (remTrade <= 2) exibe FINALIZANDO OPERACIÓN", () => {
+  const tradeTargetTs = 1700000060;
+  const snapshot = {
+    pair: "EURUSD",
+    trade: {
+      pair: "EURUSD",
+      tf: 60,
+      targetTs: tradeTargetTs,
+      phase: "IN_TRADE",
+      direction: "PUT",
+    },
+    current: {
+      phase: "SCANNING",
+    },
+  };
+
+  // Aos 58s da vela operada (faltam 2s)
+  const cardExpiring = formatLifecycleCard(snapshot, tradeTargetTs + 58);
+  assert.equal(cardExpiring.phase, "IN_TRADE");
+  assert.equal(cardExpiring.badgeText, "EXPIRANDO · PUT");
+  assert.ok(cardExpiring.primaryText.includes("FINALIZANDO OPERACIÓN"));
+  assert.equal(cardExpiring.secondsRemaining, 2);
+});
+
+test("formatLifecycleCard: IN_TRADE ao cruzar 60s (remTrade <= 0) exibe OPERACIÓN EXPIRADA", () => {
+  const tradeTargetTs = 1700000060;
+  const snapshot = {
+    pair: "EURUSD",
+    trade: {
+      pair: "EURUSD",
+      tf: 60,
+      targetTs: tradeTargetTs,
+      phase: "IN_TRADE",
+      direction: "CALL",
+    },
+    current: {
+      phase: "SCANNING",
+    },
+  };
+
+  // Exatamente no segundo 60 (remTrade = 0)
+  const cardExpired = formatLifecycleCard(snapshot, tradeTargetTs + 60);
+  assert.equal(cardExpired.phase, "IN_TRADE");
+  assert.equal(cardExpired.badgeText, "EXPIRADO · CALL");
+  assert.ok(cardExpired.primaryText.includes("OPERACIÓN EXPIRADA"));
+  assert.equal(cardExpired.secondsRemaining, 0);
+  assert.equal(cardExpired.secondaryText, "Aguardando confirmación de vela cerrada...");
+});
+
