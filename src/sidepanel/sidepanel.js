@@ -227,6 +227,7 @@ function updateClockOnlyUI() {
         timingLabel.innerHTML = `EN LA APERTURA DE LA PRÓXIMA VELA`;
       }
     }
+  }
 
   // 8. Pips nos segundos 57, 58 e 59 se houver PRE_SIGNAL ativo
   if (lastLifecycle?.current?.phase === "PRE_SIGNAL") {
