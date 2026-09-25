@@ -302,6 +302,8 @@ export class QuantPortfolio {
       isDivergent: Boolean(finalDecision.isConflict),
       uncertainty: Number((1 - adaptation.marketStability).toFixed(4)),
       isVetoed: finalDecision.isVetoed,
+      isActionable: finalDecision.isActionable !== undefined ? finalDecision.isActionable : (finalDecision.action !== "WAIT"),
+      maturity: finalDecision.maturity || "ACTIVE",
     };
   }
 

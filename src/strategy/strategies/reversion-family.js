@@ -130,19 +130,19 @@ export class ReversionFamily {
       let wickDir = null;
       let wickScore = 0;
 
-      // Rejeição de Topo (PUT): pavio superior longo (>26%) e preço recuando para o meio/fundo do range
-      if (upperWick >= 0.26 && closePos <= 0.65) {
-        const magnitude = clamp(upperWick / 0.50, 0.5, 1.2);
-        const closePull = clamp((0.70 - closePos) / 0.50, 0.2, 1.0);
-        const flowDrop = pressure < 0.20 ? 0.20 : 0.05;
+      // Rejeição de Topo (PUT): pavio superior expressivo (>= 38%) e preço recuando para a metade inferior (closePos <= 0.50)
+      if (upperWick >= 0.38 && closePos <= 0.50) {
+        const magnitude = clamp((upperWick - 0.35) / 0.35, 0.4, 1.2);
+        const closePull = clamp((0.60 - closePos) / 0.40, 0.3, 1.0);
+        const flowDrop = pressure < 0.15 ? 0.20 : 0.05;
         wickScore = magnitude * 0.40 + closePull * 0.35 + flowDrop;
-        if (wickScore >= 0.52) wickDir = "PUT";
-      } else if (lowerWick >= 0.26 && closePos >= 0.35) {
-        const magnitude = clamp(lowerWick / 0.50, 0.5, 1.2);
-        const closePull = clamp((closePos - 0.30) / 0.50, 0.2, 1.0);
-        const flowDrop = pressure > -0.20 ? 0.20 : 0.05;
+        if (wickScore >= 0.55) wickDir = "PUT";
+      } else if (lowerWick >= 0.38 && closePos >= 0.50) {
+        const magnitude = clamp((lowerWick - 0.35) / 0.35, 0.4, 1.2);
+        const closePull = clamp((closePos - 0.40) / 0.40, 0.3, 1.0);
+        const flowDrop = pressure > -0.15 ? 0.20 : 0.05;
         wickScore = magnitude * 0.40 + closePull * 0.35 + flowDrop;
-        if (wickScore >= 0.52) wickDir = "CALL";
+        if (wickScore >= 0.55) wickDir = "CALL";
       }
 
       if (wickDir) {
@@ -182,25 +182,26 @@ export class ReversionFamily {
     // 2C — FAILED BREAKOUT (Rompimento Falso de Topo ou Fundo)
     // =========================================================================
     {
-      const prevHighMax = Math.max(c1.high, c2.high);
-      const prevLowMin = Math.min(c1.low, c2.low);
+      const prevCandles = candles.slice(Math.max(0, n - 6), n - 1);
+      const prevHighMax = Math.max(...prevCandles.map((c) => c.high));
+      const prevLowMin = Math.min(...prevCandles.map((c) => c.low));
 
       let fbDir = null;
       let fbScore = 0;
 
-      // Rompimento falso de alta: c0 fez nova máxima (c0.high > prevHighMax), mas fechou abaixo do rompimento
-      if (c0.high > prevHighMax && c0.close < prevHighMax && upperWick >= 0.20) {
+      // Rompimento falso de alta: c0 fez nova máxima das últimas 5 velas, mas foi rejeitado com pavio >= 32%
+      if (c0.high > prevHighMax && c0.close < prevHighMax && upperWick >= 0.32) {
         const penetration = (c0.high - prevHighMax) / range0;
         const returnStrength = (prevHighMax - c0.close) / range0;
-        fbScore = 0.35 + clamp(penetration * 2.0, 0.1, 0.3) + clamp(returnStrength * 2.0, 0.1, 0.35);
+        fbScore = 0.30 + clamp(penetration * 2.5, 0.1, 0.35) + clamp(returnStrength * 2.0, 0.1, 0.35);
         if (pressure < 0) fbScore += 0.15;
-        if (fbScore >= 0.50) fbDir = "PUT";
-      } else if (c0.low < prevLowMin && c0.close > prevLowMin && lowerWick >= 0.20) {
+        if (fbScore >= 0.55) fbDir = "PUT";
+      } else if (c0.low < prevLowMin && c0.close > prevLowMin && lowerWick >= 0.32) {
         const penetration = (prevLowMin - c0.low) / range0;
         const returnStrength = (c0.close - prevLowMin) / range0;
-        fbScore = 0.35 + clamp(penetration * 2.0, 0.1, 0.3) + clamp(returnStrength * 2.0, 0.1, 0.35);
+        fbScore = 0.30 + clamp(penetration * 2.5, 0.1, 0.35) + clamp(returnStrength * 2.0, 0.1, 0.35);
         if (pressure > 0) fbScore += 0.15;
-        if (fbScore >= 0.50) fbDir = "CALL";
+        if (fbScore >= 0.55) fbDir = "CALL";
       }
 
       if (fbDir) {

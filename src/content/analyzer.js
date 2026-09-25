@@ -933,6 +933,37 @@ export class MarketAnalyzer {
           if (pair === this.currentSymbol) {
             this.lastCachedDecision = normalizedDecision;
           }
+
+          // Se a decisão não for acionável (SHADOW, falta de confluência ou conflito), NÃO emite PRE_SIGNAL!
+          if (decision.isActionable === false || decision.action === "WAIT") {
+            rec("DECISION_NOT_ACTIONABLE", {
+              pair,
+              action,
+              subStrategy: decision.subStrategy || decision.strategyName,
+              reasons: decision.reasons,
+              isActionable: decision.isActionable,
+            });
+            return null;
+          }
+
+          // Filtro Anti-Flip na virada consecutiva de vela:
+          // Se na vela anterior foi emitido sinal na direção oposta (delta <= 120s),
+          // exige CONFLUÊNCIA comprovada (2+ famílias) para permitir a virada rápida.
+          if (!this._lastEmittedDirectionBySymbol) this._lastEmittedDirectionBySymbol = new Map();
+          if (!this._lastEmittedTsBySymbol) this._lastEmittedTsBySymbol = new Map();
+          const lastOpposite = this._lastEmittedDirectionBySymbol.get(pair);
+          const lastOppositeTs = this._lastEmittedTsBySymbol.get(pair) || 0;
+          if (lastOpposite && lastOpposite !== action && (currentNowSec - lastOppositeTs <= 120)) {
+            if (!decision.isConfluence && (decision.confluentCount || 0) < 2) {
+              rec("REVERSAL_VETO_UNCONFIRMED", { pair, action, prevAction: lastOpposite, deltaTs: currentNowSec - lastOppositeTs });
+              logger.info("SINAL", `⚠️ Inversão imediata de [${lastOpposite} ➔ ${action}] em ${pair} vetada: exige confluência de 2+ famílias independentes.`);
+              return null;
+            }
+          }
+
+          this._lastEmittedDirectionBySymbol.set(pair, action);
+          this._lastEmittedTsBySymbol.set(pair, currentNowSec);
+
           return normalizedDecision;
         }
         return null;

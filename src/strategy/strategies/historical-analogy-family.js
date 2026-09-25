@@ -94,13 +94,13 @@ export class HistoricalAnalogyFamily {
     // =========================================================================
     {
       const res = this.exactKnn.evaluate({ currentVector: vec, candles });
-      if (res.effectiveN >= 2.5 && res.meanDistance < 2.0) {
+      if (res.effectiveN >= 3.0 && res.meanDistance < 1.8) {
         let dir = null;
         let pVal = 0.50;
-        if (res.probUp >= 0.57) {
+        if (res.probUp >= 0.65) {
           dir = "CALL";
           pVal = res.probUp;
-        } else if (res.probDown >= 0.57) {
+        } else if (res.probDown >= 0.65) {
           dir = "PUT";
           pVal = res.probDown;
         }
@@ -144,13 +144,13 @@ export class HistoricalAnalogyFamily {
     // =========================================================================
     {
       const res = this.broadKnn.evaluate({ currentVector: vec, candles });
-      if (res.effectiveN >= 8) {
+      if (res.effectiveN >= 10) {
         let dir = null;
         let pVal = 0.50;
-        if (res.probUp >= 0.56) {
+        if (res.probUp >= 0.60) {
           dir = "CALL";
           pVal = res.probUp;
-        } else if (res.probDown >= 0.56) {
+        } else if (res.probDown >= 0.60) {
           dir = "PUT";
           pVal = res.probDown;
         }
@@ -194,13 +194,13 @@ export class HistoricalAnalogyFamily {
     // =========================================================================
     {
       const res = this.recentKnn.evaluate({ currentVector: vec, candles });
-      if (res.effectiveN >= 3) {
+      if (res.effectiveN >= 4.5) {
         let dir = null;
         let pVal = 0.50;
-        if (res.probUp >= 0.565) {
+        if (res.probUp >= 0.62) {
           dir = "CALL";
           pVal = res.probUp;
-        } else if (res.probDown >= 0.565) {
+        } else if (res.probDown >= 0.62) {
           dir = "PUT";
           pVal = res.probDown;
         }

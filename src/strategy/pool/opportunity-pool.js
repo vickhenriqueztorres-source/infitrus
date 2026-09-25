@@ -53,8 +53,10 @@ export class OpportunityPool {
    * @param {string} subStrategyKey
    * @returns {Object}
    */
-  _getOrCreateStats(subStrategyKey) {
+  _getOrCreateStats(subStrategyKey, defaultMaturity = null) {
     if (!this.subStrategyStats.has(subStrategyKey)) {
+      const mat = defaultMaturity || "LEARNING";
+      const score = mat === "ACTIVE" ? 1.0 : mat === "SHADOW" ? 0.65 : 0.85;
       this.subStrategyStats.set(subStrategyKey, {
         signals: 0,
         wins: 0,
@@ -63,8 +65,8 @@ export class OpportunityPool {
         brierSum: 0,
         brierScore: 0.25, // Brier neutro inicial
         rollingAccuracy: 0.50,
-        maturity: "SHADOW",
-        maturityScore: 0.65,
+        maturity: mat,
+        maturityScore: score,
       });
     }
     return this.subStrategyStats.get(subStrategyKey);
@@ -112,7 +114,7 @@ export class OpportunityPool {
     for (const opp of rawOpportunities) {
       if (!this.validateSchema(opp)) continue;
 
-      const stats = this._getOrCreateStats(opp.subStrategy);
+      const stats = this._getOrCreateStats(opp.subStrategy, opp.maturity);
 
       // 1. Calibração online da probabilidade baseada no Brier Score empírico da subestratégia
       // Se Brier < 0.23 (boa calibração), confiança mantida; se Brier > 0.27, contrai em direção a 0.50

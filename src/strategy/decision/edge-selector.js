@@ -21,9 +21,10 @@ import { clamp } from "../detectors/detector-types.js";
 
 export class EdgeSelector {
   constructor(config = {}) {
-    this.minEdge = config.minEdge !== undefined ? config.minEdge : 0.015; // Mínimo +1.5% de vantagem sobre breakeven
-    this.minQuality = config.minQuality !== undefined ? config.minQuality : 0.50;
-    this.conflictThreshold = config.conflictThreshold !== undefined ? config.conflictThreshold : 0.010; // 1.0 p.p. de desempate
+    this.minEdge = config.minEdge !== undefined ? config.minEdge : 0.025; // Mínimo +2.5% de vantagem sobre breakeven
+    this.minQuality = config.minQuality !== undefined ? config.minQuality : 0.60;
+    this.conflictThreshold = config.conflictThreshold !== undefined ? config.conflictThreshold : 0.025; // 2.5 p.p. de desempate
+    this.requireConfluence = config.requireConfluence !== undefined ? config.requireConfluence : true;
   }
 
   /**
@@ -183,6 +184,7 @@ export class EdgeSelector {
           isVetoed: false,
           isConflict: true,
           isConfluence: false,
+          isActionable: false,
           confluenceFamilies: [],
           confluentCount: 0,
         };
@@ -193,6 +195,7 @@ export class EdgeSelector {
 
     // 5. Verificação de Confluência Ortogonal entre Famílias Distintas
     const sameDirectionCandidates = winner.action === "CALL" ? callCandidates : putCandidates;
+    const oppositeCandidates = winner.action === "CALL" ? putCandidates : callCandidates;
     const orthogonalGroups = new Set();
     const orthogonalFamilies = [];
 
@@ -218,14 +221,25 @@ export class EdgeSelector {
       );
     }
 
-    // 5.1 Política de Maturidade: Estratégias em SHADOW participam da análise/replay,
-    // mas não anunciam entrada acionável isoladamente sem validação empírica.
+    // 5.1 Política de Maturidade e Seletividade Acionável (Etapa 7):
     const isShadow = winner.maturity === "SHADOW";
-    const hasActiveConfluence = isConfluence && sameDirectionCandidates.some((c) => c.maturity && c.maturity !== "SHADOW");
-    const isActionable = !isShadow || hasActiveConfluence;
+    const sameDirectionActive = sameDirectionCandidates.some((c) => c.maturity && c.maturity !== "SHADOW");
 
-    if (isShadow && !hasActiveConfluence) {
-      reasons.unshift(`Oportunidade em SHADOW (${winner.subStrategy || winner.name}): observação analítica sem alerta acionável`);
+    // Um sinal só é ACIONÁVEL para entrada no mercado se:
+    // 1. Tiver CONFLUÊNCIA de 2+ famílias independentes (com ao menos 1 ACTIVE/LEARNING);
+    // OU
+    // 2. Tiver ALTA CONVICÇÃO unânime de estratégia ACTIVE (adjustedEdge >= 0.035, quality >= 0.68) e ZERO concorrente contrário.
+    const hasConfluence = isConfluence && sameDirectionActive;
+    const hasHighSingleConviction = !isShadow && winner.adjustedEdge >= 0.035 && winner.quality >= 0.68 && (!oppositeCandidates || oppositeCandidates.length === 0);
+
+    const isActionable = hasConfluence || hasHighSingleConviction;
+
+    if (!isActionable) {
+      if (isShadow && !sameDirectionActive) {
+        reasons.unshift(`Oportunidade em SHADOW (${winner.subStrategy || winner.name}): observação analítica sem alerta acionável`);
+      } else {
+        reasons.unshift(`Sinal isolado sem confluência inter-famílias (${orthogonalGroups.size}/2 famílias necessárias): aguardando confirmação`);
+      }
     }
 
     // 6. Cálculo do Valor Esperado (EV)
@@ -239,7 +253,7 @@ export class EdgeSelector {
 
     return {
       action: winner.action,
-      label: `${winner.action} (+${(winner.edge * 100).toFixed(1)}% - ${subStrategy || strategyName})${isShadow && !hasActiveConfluence ? " [SHADOW]" : ""}`,
+      label: `${winner.action} (+${(winner.edge * 100).toFixed(1)}% - ${subStrategy || strategyName})${isShadow && !hasConfluence ? " [SHADOW]" : ""}`,
       strategy: winner.strategy || strategyId,
       subStrategy,
       strategyId,

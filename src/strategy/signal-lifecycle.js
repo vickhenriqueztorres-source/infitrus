@@ -108,7 +108,7 @@ export class SignalLifecycle {
         this._set(lc, Phase.NO_ENTRY);
       } else if (dataOk && typeof decide === "function") {
         const d = decide();
-        if (d && (d.action === "CALL" || d.action === "PUT")) {
+        if (d && (d.action === "CALL" || d.action === "PUT") && d.isActionable !== false) {
           this._set(lc, Phase.PRE_SIGNAL, { direction: d.action, snapshot: d, lockedAt: nowSec });
         }
       }
