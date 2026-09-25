@@ -254,13 +254,19 @@ export class MicrostructureFamily {
       let eomDir = null;
       let eomScore = 0;
 
-      // Especializada nos últimos ticks antes da virada do minuto
-      if (lastTicksDirection > 0.40 && (last10TickDirection || lastTicksDirection) > 0) {
-        eomDir = "CALL";
-        eomScore = 0.35 + clamp(lastTicksDirection * 0.35, 0.15, 0.35) + clamp(pressure * 0.30, 0, 0.25);
-      } else if (lastTicksDirection < -0.40 && (last10TickDirection || lastTicksDirection) < 0) {
-        eomDir = "PUT";
-        eomScore = 0.35 + clamp(-lastTicksDirection * 0.35, 0.15, 0.35) + clamp(-pressure * 0.30, 0, 0.25);
+      // Exige cobertura temporal mínima de ticks e desbalanceamento contínuo real
+      // Impede que poucos ticks quase neutros disparem por confusão de escala discreta
+      const minEomTicks = Math.max(10, this.minTicks);
+      if (tickCount >= minEomTicks && Math.abs(pressure) >= 0.18 && Math.abs(flowImbalance) >= 0.15) {
+        const directionalMagnitude = clamp(Math.abs(pressure) * 0.50 + Math.abs(flowImbalance) * 0.50, 0, 1);
+
+        if (lastTicksDirection > 0 && pressure > 0 && flowImbalance > 0) {
+          eomDir = "CALL";
+          eomScore = 0.35 + directionalMagnitude * 0.35;
+        } else if (lastTicksDirection < 0 && pressure < 0 && flowImbalance < 0) {
+          eomDir = "PUT";
+          eomScore = 0.35 + directionalMagnitude * 0.35;
+        }
       }
 
       if (eomDir && eomScore >= 0.50) {
@@ -284,10 +290,10 @@ export class MicrostructureFamily {
             edge,
             maturity: "LEARNING",
             regimeCompatibility: 1.0,
-            evidence: { lastTicksDirection, last10TickDirection },
+            evidence: { lastTicksDirection, flowImbalance, pressure, tickCount },
             reasons: [
-              `Vetor direcional de encerramento da M1 (${eomDir})`,
-              `Agressão concentrada nos últimos segundos`,
+              `Vetor direcional contínuo de encerramento da M1 (${eomDir})`,
+              `Pressão sustentada (${(pressure * 100).toFixed(0)}%) e desbalanceamento (${(flowImbalance * 100).toFixed(0)}%)`,
             ],
             timestamp,
             fingerprint: `EOMFLOW_${eomDir}_${timestamp}`,

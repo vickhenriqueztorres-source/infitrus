@@ -51,10 +51,12 @@ export class AdaptiveKnnEngine {
     const historyStart = Math.max(5, n - this.maxHistory);
     const candidates = [];
 
-    // Compara o vetor atual Xt com as observações históricas passadas
-    // Para simplificar e manter performance em tempo real (< 2ms),
-    // sintetiza a distância euclidiana normalizada para os estados históricos
-    for (let i = historyStart; i < n - 1; i++) {
+    // Identifica o último candle fechado para impedir vazamento temporal da vela atual
+    const isLastOpen = candles[n - 1].closed === false;
+    const maxTrainIndex = isLastOpen ? n - 2 : n - 1;
+
+    for (let i = historyStart; i < maxTrainIndex; i++) {
+      if (candles[i + 1].closed === false) continue; // Nunca admite vela aberta como rótulo de resultado
       const outcomeUp = candles[i + 1].close > candles[i + 1].open ? 1 : 0;
       const age = (n - 1) - i;
 

@@ -1402,6 +1402,7 @@ export class MarketAnalyzer {
         seq: lateSeq,
         committed: true,
         late: true,
+        payout: this.registry.get(pair).payout || this.payout || 0.80,
         createdAt: Date.now(),
         tabId: this.tabId || null,
         entryPrice: closedCandle.close,
@@ -1413,6 +1414,18 @@ export class MarketAnalyzer {
     }
 
     if (isSignal) {
+      if (decision.isActionable === false) {
+        rec("DECISION_SHADOW_OBSERVE", {
+          pair,
+          direction,
+          subStrategy: decision.subStrategy || decision.strategyName,
+          prob: decision.probability,
+          edge: decision.edge,
+        });
+        logger.info("SINAL", `🔬 Oportunidade em SHADOW: [${direction} ${pair} - ${decision.subStrategy || decision.strategyName}] (apenas observação analítica)`);
+        return;
+      }
+
       decision.action = direction;
 
       // 1. Prepara sinal com committed = false (R1, R2)
@@ -1432,6 +1445,10 @@ export class MarketAnalyzer {
         createdAt: Date.now(),
         tabId: this.tabId || null,
         probability: decision.probability ?? null,
+        conservativeProbability: decision.conservativeProbability ?? decision.probability ?? null,
+        edge: decision.edge ?? null,
+        quality: decision.quality ?? null,
+        payout: this.registry.get(pair).payout || this.payout || 0.80,
         subStrategy: decision.subStrategy || decision.strategyName || null,
         entryPrice: targetCandle.open ?? closedCandle.close,
       };

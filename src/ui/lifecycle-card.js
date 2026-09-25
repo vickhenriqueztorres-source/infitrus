@@ -46,6 +46,8 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       badgeClass: "wait",
       ariaLive: "polite",
       ariaLabel: "escuchando mercado, decisión en 45 segundos",
+      tradeCard: { hasTrade: false, phase: "NO_TRADE", direction: null, primaryText: "Sin operación en curso", badgeText: "SIN OPERACIÓN", badgeClass: "wait" },
+      opportunityCard: { hasOpportunity: false, phase: "SCANNING", direction: null, primaryText: "Escuchando mercado", badgeText: "ESCANEANDO", badgeClass: "wait" },
     };
   }
 
@@ -73,6 +75,92 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
   const pair = current?.pair || trade?.pair || snapshot.pair || snapshot.symbol || "Mercado";
   const tf = current?.tf || trade?.tf || snapshot.tf || snapshot.timeframeSeconds || 60;
 
+  const tradeCard = (trade && ["ENTRY_NOW", "IN_TRADE"].includes(trade.phase))
+    ? {
+        hasTrade: true,
+        phase: trade.phase,
+        direction: trade.direction,
+        entryPrice: trade.entryPrice,
+        pair: trade.pair || pair,
+        targetTs: trade.targetTs,
+        secondsRemaining: trade.phase === "ENTRY_NOW"
+          ? Math.max(0, Math.ceil((trade.targetTs + 5) - nowSec))
+          : Math.max(0, Math.ceil((trade.targetTs + 60) - nowSec)),
+        badgeText: trade.phase === "ENTRY_NOW" ? `ENTRA AHORA · ${trade.direction}` : `EN OPERACIÓN · ${trade.direction}`,
+        badgeClass: trade.direction === "CALL" ? "call" : "put",
+        title: trade.phase === "ENTRY_NOW" ? `ENTRA AHORA — ${trade.direction === "CALL" ? "CALL ▲" : "PUT ▼"}` : `OPERACIÓN EN CURSO — ${trade.direction === "CALL" ? "CALL ▲" : "PUT ▼"}`,
+        subTitle: Number.isFinite(trade.entryPrice) ? `Entrada: ${Number(trade.entryPrice).toFixed(5)}` : (trade.phase === "ENTRY_NOW" ? "Ejecute inmediatamente en el broker" : "Operación en curso en el broker"),
+      }
+    : (lastResult && lastResult.phase === "SETTLED" && (nowSec - (lastResult.settledAt || nowSec) <= 10)
+        ? {
+            hasTrade: true,
+            phase: "SETTLED",
+            direction: lastResult.direction,
+            result: lastResult.result,
+            pair,
+            secondsRemaining: 0,
+            badgeText: formatResult(lastResult.result),
+            badgeClass: lastResult.result === "WIN" ? "call" : lastResult.result === "LOSS" ? "put" : "wait",
+            title: `Resultado: ${formatResult(lastResult.result)}${lastResult.direction ? ` (${lastResult.direction})` : ""}`,
+            subTitle: Number.isFinite(lastResult.entryPrice) && Number.isFinite(lastResult.closePrice)
+              ? `Entrada: ${Number(lastResult.entryPrice).toFixed(5)} → Cierre: ${Number(lastResult.closePrice).toFixed(5)}`
+              : "Operación finalizada",
+          }
+        : {
+            hasTrade: false,
+            phase: "NO_TRADE",
+            direction: null,
+            pair,
+            secondsRemaining: 0,
+            badgeText: "SIN OPERACIÓN",
+            badgeClass: "wait",
+            title: "Sin operación activa",
+            subTitle: "Esperando próxima entrada",
+          });
+
+  const opportunityCard = (current && current.phase === "PRE_SIGNAL")
+    ? {
+        hasOpportunity: true,
+        phase: "PRE_SIGNAL",
+        direction: current.direction,
+        pair: current.pair || pair,
+        targetTs: current.targetTs,
+        secondsRemaining: Math.max(0, Math.ceil((current.targetTs || (Math.floor(nowSec / tf) * tf + tf)) - nowSec)),
+        badgeText: `PRE-SEÑAL · ${current.direction}`,
+        badgeClass: current.direction === "CALL" ? "call" : "put",
+        title: `PRE-SEÑAL ${current.direction === "CALL" ? "CALL ▲" : "PUT ▼"}`,
+        subTitle: `Entrada al segundo :00 (vela ${current.targetTs ? new Date(current.targetTs * 1000).toTimeString().slice(0, 5) : "--:--"})`,
+      }
+    : (current && current.phase === "DECIDING"
+        ? {
+            hasOpportunity: true,
+            phase: "DECIDING",
+            direction: null,
+            pair: current.pair || pair,
+            secondsRemaining: Math.max(0, Math.ceil(((current.formingTs || Math.floor(nowSec / tf) * tf) + 58) - nowSec)),
+            badgeText: "DECIDIENDO",
+            badgeClass: "wait",
+            title: "Analizando cierre",
+            subTitle: "Decisión en instantes",
+          }
+        : {
+            hasOpportunity: false,
+            phase: current?.phase || "SCANNING",
+            direction: null,
+            pair,
+            secondsRemaining: Math.max(0, Math.ceil(((current?.formingTs || Math.floor(nowSec / tf) * tf) + 45) - nowSec)),
+            badgeText: "ESCANEANDO",
+            badgeClass: "wait",
+            title: `Escuchando ${pair}`,
+            subTitle: "Buscando oportunidades estadísticas",
+          });
+
+  function wrap(res) {
+    res.tradeCard = tradeCard;
+    res.opportunityCard = opportunityCard;
+    return res;
+  }
+
   // 2. ENTRY_NOW (Prioridade máxima / Maior destaque da tela)
   if (trade && trade.phase === "ENTRY_NOW") {
     const dir = trade.direction || "CALL";
@@ -82,7 +170,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
     const elapsed = nowSec - targetTs;
     const progressPct = Math.min(100, Math.max(0, (elapsed / 5) * 100));
 
-    return {
+    return wrap({
       primaryText: `ENTRA AHORA — ${dirSymbol} · quedan ${rem}s`,
       secondaryText: null,
       phase: "ENTRY_NOW",
@@ -93,7 +181,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       badgeClass: dir === "CALL" ? "call" : "put",
       ariaLive: "assertive",
       ariaLabel: `entra ahora en ${dir}, quedan ${rem} segundos`,
-    };
+    });
   }
 
   // Linha secundária de operação em andamento (IN_TRADE)
@@ -129,7 +217,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
         badgeText = `EN OPERACIÓN · ${dir}`;
       }
 
-      return {
+      return wrap({
         primaryText,
         secondaryText: isExpired ? "Aguardando confirmación de vela cerrada..." : entryText,
         phase: "IN_TRADE",
@@ -140,7 +228,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
         badgeClass: dir === "CALL" ? "call" : "put",
         ariaLive: "polite",
         ariaLabel: `en operación ${dir}, expira en ${remTrade} segundos`,
-      };
+      });
     }
   }
 
@@ -155,7 +243,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       const priceText = Number.isFinite(lastResult.entryPrice) && Number.isFinite(lastResult.closePrice)
         ? `Entrada: ${Number(lastResult.entryPrice).toFixed(5)} → Cierre: ${Number(lastResult.closePrice).toFixed(5)}`
         : inTradeSecondary;
-      return {
+      return wrap({
         primaryText: `Resultado: ${resStr}${dirSymbol ? ` (${dirSymbol})` : ""}`,
         secondaryText: priceText,
         phase: "SETTLED",
@@ -166,7 +254,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
         badgeClass: lastResult.result === "WIN" ? "call" : lastResult.result === "LOSS" ? "put" : "wait",
         ariaLive: "polite",
         ariaLabel: `resultado de operación: ${resStr.toLowerCase()}`,
-      };
+      });
     }
   }
 
@@ -183,7 +271,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
     const targetTime = targetDate.toTimeString().slice(0, 5);
     const preSecondary = inTradeSecondary || `Entrada al segundo :00 (vela ${targetTime})`;
 
-    return {
+    return wrap({
       primaryText: `PRE-SEÑAL ${dirSymbol} · entra en ${rem}s`,
       secondaryText: preSecondary,
       phase: "PRE_SIGNAL",
@@ -194,13 +282,13 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       badgeClass: dir === "CALL" ? "call" : "put",
       ariaLive: "polite",
       ariaLabel: `pre-señal ${dir}, entra en ${rem} segundos`,
-    };
+    });
   }
 
   // 5. CANCELLED
   if (current && current.phase === "CANCELLED") {
     const reasonText = formatCancelReason(current.reason);
-    return {
+    return wrap({
       primaryText: `Señal cancelada · ${reasonText}`,
       secondaryText: inTradeSecondary,
       phase: "CANCELLED",
@@ -211,12 +299,12 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       badgeClass: "wait",
       ariaLive: "polite",
       ariaLabel: `señal cancelada por ${reasonText}`,
-    };
+    });
   }
 
   // 6. NO_ENTRY
   if (current && current.phase === "NO_ENTRY") {
-    return {
+    return wrap({
       primaryText: "Sin entrada en esta vela",
       secondaryText: inTradeSecondary,
       phase: "NO_ENTRY",
@@ -227,7 +315,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       badgeClass: "wait",
       ariaLive: "polite",
       ariaLabel: "sin entrada en esta vela",
-    };
+    });
   }
 
   // 7. DECIDING
@@ -237,7 +325,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
     const s = nowSec - formingTs;
     const progressPct = inTradeProgress ?? Math.min(100, Math.max(0, (s / 58) * 100));
 
-    return {
+    return wrap({
       primaryText: `Analizando cierre · decide en ${rem}s`,
       secondaryText: inTradeSecondary,
       phase: "DECIDING",
@@ -248,7 +336,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
       badgeClass: "wait",
       ariaLive: "polite",
       ariaLabel: `analizando cierre, decisión en ${rem} segundos`,
-    };
+    });
   }
 
   // 8. SCANNING (Padrão)
@@ -264,7 +352,7 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
     scanSecondary = `Última operación: ${lastResStr}${lastDir}`;
   }
 
-  return {
+  return wrap({
     primaryText: `Escuchando ${pair} · decisión en ${rem}s`,
     secondaryText: scanSecondary,
     phase: "SCANNING",
@@ -275,5 +363,5 @@ export function formatLifecycleCard(snapshot = {}, nowSec = 0) {
     badgeClass: "wait",
     ariaLive: "polite",
     ariaLabel: `escuchando ${pair}, decisión en ${rem} segundos`,
-  };
+  });
 }

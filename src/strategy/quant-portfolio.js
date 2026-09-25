@@ -350,16 +350,27 @@ export class QuantPortfolio {
 
   /**
    * Atualização de estado APENAS quando uma vela fecha.
+   * Encaminha o candle individual com timestamp e suas características ao CUSUM.
    *
-   * @param {Array<Object>} closedCandles
+   * @param {Array<Object>|Object} closedCandles
    * @param {Object} [features=null]
    */
   observeClosedCandle(closedCandles = [], features = null) {
+    const candlesList = Array.isArray(closedCandles) ? closedCandles : [closedCandles];
+    const lastCandle = candlesList.length > 0 ? candlesList[candlesList.length - 1] : null;
+    if (!lastCandle) return;
+
+    let computedFeatures = features;
+    if (!computedFeatures && this.featureBuilder?.build && candlesList.length >= 10) {
+      const built = this.featureBuilder.build(candlesList);
+      computedFeatures = built?.rawFeatures || built?.featureMap || null;
+    }
+
     if (this.regimeDetector?.observeClosedCandle) {
-      this.regimeDetector.observeClosedCandle(closedCandles, features);
+      this.regimeDetector.observeClosedCandle(lastCandle, computedFeatures || {});
     }
     if (this.featureBuilder?.observeClosedCandle) {
-      this.featureBuilder.observeClosedCandle(closedCandles, features);
+      this.featureBuilder.observeClosedCandle(candlesList, computedFeatures);
     }
   }
 

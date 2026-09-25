@@ -218,8 +218,14 @@ export class EdgeSelector {
       );
     }
 
-    if (winner.reasons && Array.isArray(winner.reasons)) {
-      reasons.push(...winner.reasons);
+    // 5.1 Política de Maturidade: Estratégias em SHADOW participam da análise/replay,
+    // mas não anunciam entrada acionável isoladamente sem validação empírica.
+    const isShadow = winner.maturity === "SHADOW";
+    const hasActiveConfluence = isConfluence && sameDirectionCandidates.some((c) => c.maturity && c.maturity !== "SHADOW");
+    const isActionable = !isShadow || hasActiveConfluence;
+
+    if (isShadow && !hasActiveConfluence) {
+      reasons.unshift(`Oportunidade em SHADOW (${winner.subStrategy || winner.name}): observação analítica sem alerta acionável`);
     }
 
     // 6. Cálculo do Valor Esperado (EV)
@@ -233,7 +239,7 @@ export class EdgeSelector {
 
     return {
       action: winner.action,
-      label: `${winner.action} (+${(winner.edge * 100).toFixed(1)}% - ${subStrategy || strategyName})`,
+      label: `${winner.action} (+${(winner.edge * 100).toFixed(1)}% - ${subStrategy || strategyName})${isShadow && !hasActiveConfluence ? " [SHADOW]" : ""}`,
       strategy: winner.strategy || strategyId,
       subStrategy,
       strategyId,
@@ -249,6 +255,8 @@ export class EdgeSelector {
       breakeven: Number(breakeven.toFixed(4)),
       payout,
       reasons,
+      maturity: winner.maturity || "ACTIVE",
+      isActionable,
       isVetoed: false,
       isConflict,
       isConfluence,

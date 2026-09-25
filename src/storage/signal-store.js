@@ -209,6 +209,63 @@ export class SignalStore {
   }
 
   /**
+   * Liquida formalmente um sinal de forma atômica e idempotente.
+   * Se já estiver liquidado, retorna o registro existente sem alterar.
+   *
+   * @param {string} id
+   * @param {Object} outcome
+   * @returns {Promise<Object|null>}
+   */
+  async settleSignal(id, { result, entryPrice, closePrice, pnlUnits, settledAt = Date.now() } = {}) {
+    if (!id) return null;
+
+    let existing = await this.getSignalById(id);
+    if (!existing) return null;
+    if (existing.status === "SETTLED") {
+      // Idempotência: já liquidado
+      return existing;
+    }
+
+    const updated = {
+      ...existing,
+      status: "SETTLED",
+      result: result || existing.result,
+      entryPrice: entryPrice ?? existing.entryPrice,
+      closePrice: closePrice ?? existing.closePrice,
+      pnlUnits: pnlUnits ?? existing.pnlUnits,
+      settledAt,
+    };
+
+    return this.putSignal(updated);
+  }
+
+  /**
+   * Cancela um sinal de forma atômica e idempotente.
+   *
+   * @param {string} id
+   * @param {string} [reason]
+   * @returns {Promise<Object|null>}
+   */
+  async cancelSignal(id, reason = null) {
+    if (!id) return null;
+
+    let existing = await this.getSignalById(id);
+    if (!existing) return null;
+    if (existing.status === "CANCELLED") {
+      return existing;
+    }
+
+    const updated = {
+      ...existing,
+      status: "CANCELLED",
+      cancelReason: reason || existing.cancelReason,
+      cancelledAt: Date.now(),
+    };
+
+    return this.putSignal(updated);
+  }
+
+  /**
    * Verifica se um sinal com o id especificado já existe (R1, deduplicação).
    *
    * @param {string} id

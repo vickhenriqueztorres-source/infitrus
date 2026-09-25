@@ -6,7 +6,7 @@ import {
   swRestoreState,
   swBuildExportBundle,
 } from "../diagnostics/flight-recorder.js";
-import { signalStore } from "../storage/signal-store.js";
+import { signalStore, getNextGlobalSeq } from "../storage/signal-store.js";
 
 configureFlightRecorder({ ctx: "sw" });
 swRestoreState().catch(() => {});
@@ -289,6 +289,73 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
       sendResponse({ ok: false, error: err?.message || String(err), signals: [] });
     });
     return true; // resposta assíncrona
+  }
+
+  // Centralização de gravação transacional durável no contexto da extensão
+  if (message?.type === "ORACLE_RECORD_SIGNAL") {
+    (async () => {
+      try {
+        const sig = message.signal;
+        if (!sig || !sig.id) {
+          sendResponse({ ok: false, error: "Sinal inválido ou sem id" });
+          return;
+        }
+
+        // Atribui seq global se ausente
+        if (!Number.isFinite(sig.seq)) {
+          sig.seq = await getNextGlobalSeq();
+        }
+
+        sig.committed = true;
+        sig.tabId = sig.tabId || sender?.tab?.id || message.tabId;
+
+        const saved = await signalStore.putSignal(sig);
+        rec("SW_SIGNAL_RECORDED", { id: saved.id, seq: saved.seq, symbol: saved.symbol, action: saved.action || saved.direction });
+        sendResponse({ ok: true, signal: saved });
+      } catch (err) {
+        rec("SW_SIGNAL_RECORD_ERROR", { error: err?.message || String(err) });
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === "ORACLE_SETTLE_SIGNAL") {
+    (async () => {
+      try {
+        const { id, outcome } = message;
+        if (!id) {
+          sendResponse({ ok: false, error: "id obrigatório" });
+          return;
+        }
+        const settled = await signalStore.settleSignal(id, outcome || {});
+        rec("SW_SIGNAL_SETTLED", { id, result: outcome?.result });
+        sendResponse({ ok: true, signal: settled });
+      } catch (err) {
+        rec("SW_SIGNAL_SETTLE_ERROR", { id: message.id, error: err?.message || String(err) });
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === "ORACLE_CANCEL_SIGNAL") {
+    (async () => {
+      try {
+        const { id, reason } = message;
+        if (!id) {
+          sendResponse({ ok: false, error: "id obrigatório" });
+          return;
+        }
+        const cancelled = await signalStore.cancelSignal(id, reason);
+        rec("SW_SIGNAL_CANCELLED", { id, reason });
+        sendResponse({ ok: true, signal: cancelled });
+      } catch (err) {
+        rec("SW_SIGNAL_CANCEL_ERROR", { id: message.id, error: err?.message || String(err) });
+        sendResponse({ ok: false, error: err?.message || String(err) });
+      }
+    })();
+    return true;
   }
 
   if (message?.type === "ENSURE_OFFSCREEN") {

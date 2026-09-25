@@ -45,7 +45,28 @@ export class SignalAuditor {
   setTabId(tabId) {
     if (!tabId) return;
     this.tabId = Number(tabId);
-    signalStore.getSignals(150, { tabId: this.tabId }).then((sigs) => {
+
+    // Consulta transacional durável no SW com fallback local
+    const fetchFromSW = typeof chrome !== "undefined" && chrome.runtime?.sendMessage
+      ? new Promise((resolve) => {
+          try {
+            chrome.runtime.sendMessage({ type: "GET_SIGNALS", limit: 150, tabId: this.tabId }, (resp) => {
+              if (chrome.runtime.lastError || !resp?.ok || !Array.isArray(resp.signals)) resolve(null);
+              else resolve(resp.signals);
+            });
+          } catch (_) {
+            resolve(null);
+          }
+        })
+      : Promise.resolve(null);
+
+    fetchFromSW.then(async (swSigs) => {
+      if (Array.isArray(swSigs) && swSigs.length > 0) {
+        this.signals = swSigs;
+        this._recomputeStats();
+        return;
+      }
+      const sigs = await signalStore.getSignals(150, { tabId: this.tabId });
       if (Array.isArray(sigs) && sigs.length > 0) {
         this.signals = sigs;
         this._recomputeStats();
@@ -356,14 +377,27 @@ export class SignalAuditor {
     const signals = this.signals.slice(0, 150);
     for (const signal of signals) {
       const chave = signal.id || `${signal.symbol}:${signal.timeframeSeconds || signal.timeframe || 60}:${signal.candleTimestamp || signal.timestamp}:${signal.strategyVersion || "1.0.0"}`;
+      const record = {
+        ...signal,
+        id: chave,
+        tabId: this.tabId,
+        committed: true,
+      };
+
+      // Gravação local imediata
       try {
-        await signalStore.putSignal({
-          ...signal,
-          id: chave,
-          tabId: this.tabId,
-          committed: true,
-        });
+        await signalStore.putSignal(record);
       } catch (_) {}
+
+      // Gravação durável no contexto da extensão via SW
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        try {
+          chrome.runtime.sendMessage({
+            type: "ORACLE_RECORD_SIGNAL",
+            signal: record,
+          }, () => {});
+        } catch (_) {}
+      }
     }
 
     // Fallback opcional apenas para os últimos 10 sinais (conforme R3)

@@ -112,85 +112,118 @@ function updateClockOnlyUI() {
     card.classList.remove("is-call", "is-put", "is-wait", "is-execute", "is-in-trade");
     card.setAttribute("aria-live", cardData.ariaLive);
 
-    if (cardData.phase === "ENTRY_NOW") {
-      card.classList.add("is-execute", cardData.direction === "CALL" ? "is-call" : "is-put");
-    } else if (cardData.phase === "PRE_SIGNAL") {
-      card.classList.add(cardData.direction === "CALL" ? "is-call" : "is-put");
-    } else if (cardData.phase === "IN_TRADE") {
-      card.classList.add("is-in-trade", cardData.direction === "CALL" ? "is-call" : "is-put");
-    } else if (cardData.phase === "SETTLED") {
-      card.classList.add(cardData.badgeClass === "call" ? "is-call" : cardData.badgeClass === "put" ? "is-put" : "is-wait");
+    const hasSimultaneous = Boolean(cardData.tradeCard?.hasTrade && cardData.opportunityCard?.hasOpportunity);
+    const activeDisplay = hasSimultaneous ? cardData.tradeCard : cardData;
+
+    if (activeDisplay.phase === "ENTRY_NOW") {
+      card.classList.add("is-execute", activeDisplay.direction === "CALL" ? "is-call" : "is-put");
+    } else if (activeDisplay.phase === "PRE_SIGNAL") {
+      card.classList.add(activeDisplay.direction === "CALL" ? "is-call" : "is-put");
+    } else if (activeDisplay.phase === "IN_TRADE") {
+      card.classList.add("is-in-trade", activeDisplay.direction === "CALL" ? "is-call" : "is-put");
+    } else if (activeDisplay.phase === "SETTLED") {
+      card.classList.add(activeDisplay.badgeClass === "call" ? "is-call" : activeDisplay.badgeClass === "put" ? "is-put" : "is-wait");
     } else {
       card.classList.add("is-wait");
     }
-  }
 
-  // 2. Badge de Fase / Direção
-  const badge = document.getElementById("signal-direction-badge");
-  if (badge) {
-    badge.className = `signal-badge ${cardData.badgeClass}`;
-    badge.textContent = cardData.badgeText;
-  }
-
-  // 3. Cronômetro / Contagem Regressiva
-  const timerBadge = document.getElementById("signal-timer-badge");
-  if (timerBadge) {
-    timerBadge.textContent = cardData.secondsRemaining !== null && cardData.secondsRemaining !== undefined
-      ? `${cardData.secondsRemaining}s`
-      : "00s";
-    timerBadge.setAttribute("aria-label", cardData.ariaLabel);
-    timerBadge.classList.toggle("warning", cardData.secondsRemaining <= 15 && cardData.secondsRemaining > 3);
-    timerBadge.classList.toggle("prepare", cardData.secondsRemaining <= 3 && cardData.secondsRemaining > 0);
-  }
-
-  // 4. Ícone do Card
-  const iconEl = document.getElementById("signal-icon");
-  if (iconEl) {
-    if (cardData.phase === "ENTRY_NOW" || cardData.phase === "PRE_SIGNAL" || cardData.phase === "IN_TRADE") {
-      iconEl.textContent = cardData.direction === "CALL" ? "▲" : "▼";
-    } else if (cardData.phase === "SETTLED") {
-      iconEl.textContent = cardData.badgeClass === "call" ? "✓" : cardData.badgeClass === "put" ? "✗" : "―";
-    } else {
-      iconEl.textContent = "◎";
+    // 2. Badge de Fase / Direção
+    const badge = document.getElementById("signal-direction-badge");
+    if (badge) {
+      badge.className = `signal-badge ${activeDisplay.badgeClass}`;
+      badge.textContent = activeDisplay.badgeText;
     }
-  }
 
-  // 5. Frase Principal Única e Linha Secundária
-  const titleEl = document.getElementById("signal-title");
-  if (titleEl) {
-    titleEl.textContent = cardData.primaryText;
-  }
+    // 3. Cronômetro / Contagem Regressiva
+    const timerBadge = document.getElementById("signal-timer-badge");
+    if (timerBadge) {
+      const remSec = activeDisplay.secondsRemaining !== null && activeDisplay.secondsRemaining !== undefined
+        ? activeDisplay.secondsRemaining
+        : 0;
+      timerBadge.textContent = `${remSec}s`;
+      timerBadge.setAttribute("aria-label", activeDisplay.ariaLabel || "");
+      timerBadge.classList.toggle("warning", remSec <= 15 && remSec > 3);
+      timerBadge.classList.toggle("prepare", remSec <= 3 && remSec > 0);
+    }
 
-  const subTitleEl = document.getElementById("signal-subtitle");
-  if (subTitleEl) {
-    subTitleEl.textContent = cardData.secondaryText || (activeSignalData?.subStrategy ? `Estrategia: ${activeSignalData.subStrategy}` : "");
-  }
-
-  // 6. Barra de Progresso ligada ao estado (não ao minuto cru)
-  const progressBar = document.getElementById("signal-progress-bar");
-  if (progressBar) {
-    progressBar.style.width = `${Math.min(100, Math.max(0, cardData.progressPct))}%`;
-  }
-
-  // 7. Rótulo de Momento de Execução
-  const timingLabel = document.getElementById("entry-timing-label");
-  if (timingLabel) {
-    if (cardData.phase === "ENTRY_NOW") {
-      timingLabel.innerHTML = `<span style="color:#3FE0C5;font-weight:800;letter-spacing:0.05em">¡ENTRA AHORA EN LA APERTURA!</span>`;
-    } else if (cardData.phase === "PRE_SIGNAL") {
-      timingLabel.innerHTML = `AL SEGUNDO :00 DE LA PRÓXIMA VELA (en ${cardData.secondsRemaining}s)`;
-    } else if (cardData.phase === "IN_TRADE") {
-      if (cardData.secondsRemaining <= 2) {
-        timingLabel.innerHTML = `<span style="font-weight:700;color:#F59E0B">FINALIZANDO OPERACIÓN (${cardData.secondsRemaining}s)</span>`;
+    // 4. Ícone do Card
+    const iconEl = document.getElementById("signal-icon");
+    if (iconEl) {
+      if (activeDisplay.phase === "ENTRY_NOW" || activeDisplay.phase === "PRE_SIGNAL" || activeDisplay.phase === "IN_TRADE") {
+        iconEl.textContent = activeDisplay.direction === "CALL" ? "▲" : "▼";
+      } else if (activeDisplay.phase === "SETTLED") {
+        iconEl.textContent = activeDisplay.badgeClass === "call" ? "✓" : activeDisplay.badgeClass === "put" ? "✗" : "―";
       } else {
-        timingLabel.innerHTML = `<span style="font-weight:700">OPERACIÓN EN CURSO (${cardData.secondsRemaining}s para expirar)</span>`;
+        iconEl.textContent = "◎";
       }
-    } else if (cardData.phase === "SETTLED") {
-      timingLabel.innerHTML = `OPERACIÓN LIQUIDADA (${cardData.badgeText})`;
-    } else {
-      timingLabel.innerHTML = `EN LA APERTURA DE LA PRÓXIMA VELA`;
     }
-  }
+
+    // 5. Frase Principal Única e Linha Secundária
+    const titleEl = document.getElementById("signal-title");
+    if (titleEl) {
+      titleEl.textContent = activeDisplay.title || activeDisplay.primaryText;
+    }
+
+    const subTitleEl = document.getElementById("signal-subtitle");
+    if (subTitleEl) {
+      subTitleEl.textContent = activeDisplay.subTitle || activeDisplay.secondaryText || (activeSignalData?.subStrategy ? `Estrategia: ${activeSignalData.subStrategy}` : "");
+    }
+
+    // 6. Barra de Progresso ligada ao estado (não ao minuto cru)
+    const progressBar = document.getElementById("signal-progress-bar");
+    if (progressBar) {
+      progressBar.style.width = `${Math.min(100, Math.max(0, activeDisplay.progressPct ?? 0))}%`;
+    }
+
+    // Renderiza a área da Próxima Oportunidade se simultânea
+    const oppSubcard = document.getElementById("opportunity-subcard");
+    const oppBadge = document.getElementById("opp-badge");
+    const oppTimer = document.getElementById("opp-timer");
+    const oppTitle = document.getElementById("opp-title");
+    const oppSubtitle = document.getElementById("opp-subtitle");
+
+    if (oppSubcard) {
+      if (hasSimultaneous) {
+        oppSubcard.style.display = "block";
+        const opp = cardData.opportunityCard;
+        oppSubcard.className = `opportunity-subcard is-${opp.direction === "CALL" ? "call" : "put"}`;
+        if (oppBadge) {
+          oppBadge.className = `signal-badge ${opp.badgeClass}`;
+          oppBadge.textContent = opp.badgeText;
+        }
+        if (oppTimer) {
+          oppTimer.textContent = `${opp.secondsRemaining}s`;
+        }
+        if (oppTitle) {
+          oppTitle.textContent = `${opp.title} · entra en ${opp.secondsRemaining}s`;
+        }
+        if (oppSubtitle) {
+          oppSubtitle.textContent = opp.subTitle || "Entrada al segundo :00 de la próxima vela";
+        }
+      } else {
+        oppSubcard.style.display = "none";
+      }
+    }
+
+    // 7. Rótulo de Momento de Execução
+    const timingLabel = document.getElementById("entry-timing-label");
+    if (timingLabel) {
+      if (activeDisplay.phase === "ENTRY_NOW") {
+        timingLabel.innerHTML = `<span style="color:#3FE0C5;font-weight:800;letter-spacing:0.05em">¡ENTRA AHORA EN LA APERTURA!</span>`;
+      } else if (activeDisplay.phase === "PRE_SIGNAL") {
+        timingLabel.innerHTML = `AL SEGUNDO :00 DE LA PRÓXIMA VELA (en ${activeDisplay.secondsRemaining}s)`;
+      } else if (activeDisplay.phase === "IN_TRADE") {
+        if (activeDisplay.secondsRemaining <= 2) {
+          timingLabel.innerHTML = `<span style="font-weight:700;color:#F59E0B">FINALIZANDO OPERACIÓN (${activeDisplay.secondsRemaining}s)</span>`;
+        } else {
+          timingLabel.innerHTML = `<span style="font-weight:700">OPERACIÓN EN CURSO (${activeDisplay.secondsRemaining}s para expirar)</span>`;
+        }
+      } else if (activeDisplay.phase === "SETTLED") {
+        timingLabel.innerHTML = `OPERACIÓN LIQUIDADA (${activeDisplay.badgeText})`;
+      } else {
+        timingLabel.innerHTML = `EN LA APERTURA DE LA PRÓXIMA VELA`;
+      }
+    }
 
   // 8. Pips nos segundos 57, 58 e 59 se houver PRE_SIGNAL ativo
   if (lastLifecycle?.current?.phase === "PRE_SIGNAL") {
@@ -345,14 +378,29 @@ function renderQuantAnalysis(data) {
 
   // 3. Microestrutura
   const micro = data.microstructure || {};
+  const hasTicks = Boolean(micro && (micro.candleTickCount > 0 || micro.tickCount > 0));
+  const tickCount = micro.candleTickCount ?? micro.tickCount ?? 0;
+
   const velEl = document.getElementById("m-vel");
-  if (velEl) velEl.textContent = `${Number(micro.tickVelocity || 0).toFixed(1)} t/s`;
+  if (velEl) velEl.textContent = hasTicks ? `${Number(micro.tickVelocity ?? micro.tickArrivalRate ?? 0).toFixed(1)} t/s` : "---";
+
+  const pressure = Number(micro.pressure ?? 0);
+  const pressureEl = document.getElementById("m-pressure");
+  if (pressureEl) {
+    pressureEl.textContent = hasTicks ? `${pressure >= 0 ? "+" : ""}${Math.round(pressure * 100)}%` : "---";
+  }
 
   const buyEl = document.getElementById("m-buy");
   if (buyEl) buyEl.textContent = `${Math.round(Number(micro.buyerPressure ?? 0.5) * 100)}%`;
 
+  const buyRatioEl = document.getElementById("m-buy-ratio");
+  if (buyRatioEl) {
+    const ratio = micro.uptickRatio ?? (micro.buyerPressure ?? null);
+    buyRatioEl.textContent = hasTicks && ratio !== null ? `${Math.round(Number(ratio) * 100)}%` : "---";
+  }
+
   const ticksEl = document.getElementById("m-ticks");
-  if (ticksEl) ticksEl.textContent = String(micro.candleTickCount || 0);
+  if (ticksEl) ticksEl.textContent = hasTicks ? String(tickCount) : "---";
 
   const accEl = document.getElementById("m-acc");
   if (accEl) accEl.textContent = Number(micro.velocityAcceleration || 0).toFixed(2);
@@ -402,26 +450,20 @@ function renderSignalsHistory(signals = []) {
 
   const rawList = Array.isArray(signals) ? signals : [];
 
-  // R4, R7: Filtragem transacional estrita
+  // R4, R7: Validação transacional estrita (apenas sinais commitados)
   const validSignals = [];
+  let maxSeq = lastRenderedSignalSeq;
   for (const sig of rawList) {
     if (sig.committed === false) {
       rec("SIGNAL_SKIP_NOT_COMMITTED", { id: sig.id, seq: sig.seq });
       continue;
     }
-
-    if (Number.isFinite(sig.seq)) {
-      if (sig.seq < lastRenderedSignalSeq) {
-        rec("SEQ_GAP", { id: sig.id, seq: sig.seq, lastRenderedSeq: lastRenderedSignalSeq });
-        continue;
-      }
-      if (sig.seq > lastRenderedSignalSeq) {
-        lastRenderedSignalSeq = sig.seq;
-      }
+    if (Number.isFinite(sig.seq) && sig.seq > maxSeq) {
+      maxSeq = sig.seq;
     }
-
     validSignals.push(sig);
   }
+  lastRenderedSignalSeq = maxSeq;
 
   if (countBadge) countBadge.textContent = `${validSignals.length} señales`;
 
@@ -577,39 +619,53 @@ function renderMultiAssetBar(state, allSymbols = [], currentSelected) {
     const isActive = sym === currentSelected;
     const isTradeActive = symData.lifecycle?.trade?.phase === "IN_TRADE" || symData.lifecycle?.trade?.phase === "ENTRY_NOW";
     const tradeDir = symData.lifecycle?.trade?.direction;
-    const preSigDir = symData.lifecycle?.current?.phase === "PRE_SIGNAL" ? symData.lifecycle?.current?.direction : null;
-    const action = preSigDir || symData.action || (isTradeActive ? tradeDir : symData.lifecycle?.current?.direction) || "WAIT";
-    const phase = symData.lifecycle?.current?.phase === "PRE_SIGNAL"
-      ? "PRE_SIGNAL"
-      : (symData.lifecycle?.trade?.phase || symData.lifecycle?.current?.phase || "SCANNING");
-    const isExpiring = phase === "IN_TRADE" && (symData.lifecycle?.trade?.secondsRemaining ?? 60) <= 2;
-    const hasSignal = phase === "PRE_SIGNAL" || phase === "ENTRY_NOW" || (phase === "IN_TRADE" && !isExpiring);
+    const isPreActive = symData.lifecycle?.current?.phase === "PRE_SIGNAL";
+    const preSigDir = isPreActive ? symData.lifecycle?.current?.direction : null;
 
     const pill = document.createElement("button");
     pill.type = "button";
     pill.className = `asset-pill ${isActive ? "is-active" : ""}`;
 
-    const dot = document.createElement("span");
-    dot.className = `pill-dot ${action === "CALL" ? "call" : action === "PUT" ? "put" : ""}`;
-    if (hasSignal) dot.classList.add("pulse");
+    // Indicador da Operação Ativa
+    if (isTradeActive && tradeDir) {
+      const tradeTag = document.createElement("span");
+      tradeTag.className = `pill-trade-tag ${tradeDir === "CALL" ? "call" : "put"}`;
+      tradeTag.textContent = tradeDir;
+      pill.appendChild(tradeTag);
+    } else {
+      const dot = document.createElement("span");
+      dot.className = "pill-dot";
+      pill.appendChild(dot);
+    }
 
     const label = document.createElement("span");
     label.textContent = sym;
-
-    pill.appendChild(dot);
     pill.appendChild(label);
 
-    if (hasSignal && action !== "WAIT") {
-      const tag = document.createElement("small");
-      tag.style.fontSize = "8px";
-      tag.style.fontWeight = "800";
-      tag.style.marginLeft = "3px";
-      tag.textContent = action;
-      pill.appendChild(tag);
+    // Indicador da Próxima Oportunidade / Pré-Sinal
+    if (isPreActive && preSigDir) {
+      const preDot = document.createElement("span");
+      preDot.className = `pill-pre-dot ${preSigDir === "CALL" ? "call" : "put"}`;
+      preDot.title = `Pré-sinal ${preSigDir} para a próxima vela`;
+      pill.appendChild(preDot);
+
+      const preTag = document.createElement("small");
+      preTag.style.fontSize = "7.5px";
+      preTag.style.fontWeight = "800";
+      preTag.style.color = preSigDir === "CALL" ? "#3FE0C5" : "#FF5A6E";
+      preTag.textContent = `⚡${preSigDir}`;
+      pill.appendChild(preTag);
     }
 
     pill.addEventListener("click", () => {
       panelSelectedSymbol = sym;
+      const targetLc = state.symbols?.[sym]?.lifecycle || null;
+      if (targetLc?.lastResult?.id) playedSoundSet.add(`${targetLc.lastResult.id}:SETTLED`);
+      if (targetLc?.trade?.id) {
+        playedSoundSet.add(`${targetLc.trade.id}:ENTRY_NOW`);
+        playedSoundSet.add(`${targetLc.trade.id}:PRE_SIGNAL`);
+      }
+      lastLifecycle = targetLc;
       sendToBoundTab({ type: "ORACLE_SELECT_SYMBOL", symbol: sym });
       refreshWindowState();
     });
@@ -696,6 +752,14 @@ function renderState(state = null, signals = [], logs = []) {
     // Avalia efeitos sonoros da transição do ciclo de vida
     const nextLifecycle = displayData.lifecycle || null;
     const sec = localMarketClock.secondInCandle(60);
+    if (!lastLifecycle && nextLifecycle) {
+      // Inicialização do painel: marca eventos pré-existentes como já tocados
+      if (nextLifecycle.lastResult?.id) playedSoundSet.add(`${nextLifecycle.lastResult.id}:SETTLED`);
+      if (nextLifecycle.trade?.id) {
+        playedSoundSet.add(`${nextLifecycle.trade.id}:ENTRY_NOW`);
+        playedSoundSet.add(`${nextLifecycle.trade.id}:PRE_SIGNAL`);
+      }
+    }
     const sounds = soundsForTransition(lastLifecycle, nextLifecycle, sec, playedSoundSet);
     playSoundList(sounds);
     lastLifecycle = nextLifecycle;
