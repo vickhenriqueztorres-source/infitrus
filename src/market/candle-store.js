@@ -84,15 +84,16 @@ export class CandleStore {
   markCandleClosed(candle) {
     if (!candle) return;
     const tf = candle.timeframe || candle.timeframeSeconds || 60;
-    const key = this.getSeriesKey(candle.symbol, tf);
+    const seriesKey = this.getSeriesKey(candle.symbol, tf);
+    const key = `${seriesKey}:${candle.timestamp}`;
 
-    // Se já havia timer para este canal, consolida o anterior como congelado
+    // Se já havia timer para este canal/candle, consolida o anterior como congelado
     if (this.freezeTimers.has(key)) {
       const prevEntry = this.freezeTimers.get(key);
       const prevTimerId = prevEntry?.timerId || prevEntry;
       clearTimeout(prevTimerId);
       this.freezeTimers.delete(key);
-      const prev = prevEntry?.candle || this.candles.get(key);
+      const prev = prevEntry?.candle || this.candles.get(seriesKey);
       if (prev) {
         prev.frozen = true;
       }
@@ -116,36 +117,54 @@ export class CandleStore {
       timerId.unref();
     }
 
-    this.freezeTimers.set(key, { timerId, candle });
+    this.freezeTimers.set(key, { timerId, candle, seriesKey, timestamp: candle.timestamp });
   }
 
   /**
-   * Se chegar tick novo no candle "quase congelado", cancela congelamento e reabre candle.
+   * Se chegar tick novo no candle "quase congelado", cancela timer sem reabrir candle fechado.
+   * Regra estrita: candle fechado permanece fechado (closed=true).
    * @param {string} symbol
    * @param {number|string} timeframe
+   * @param {number} [timestamp]
    */
-  cancelFreezeTimer(symbol, timeframe) {
-    const key = this.getSeriesKey(symbol, timeframe);
-    if (this.freezeTimers.has(key)) {
-      const entry = this.freezeTimers.get(key);
+  cancelFreezeTimer(symbol, timeframe, timestamp = null) {
+    const seriesKey = this.getSeriesKey(symbol, timeframe);
+    let targetKey = timestamp != null ? `${seriesKey}:${timestamp}` : null;
+
+    if (!targetKey || !this.freezeTimers.has(targetKey)) {
+      if (this.freezeTimers.has(seriesKey)) {
+        targetKey = seriesKey;
+      } else {
+        for (const [k, entry] of this.freezeTimers.entries()) {
+          if (k === seriesKey || entry?.seriesKey === seriesKey || k.startsWith(`${seriesKey}:`)) {
+            targetKey = k;
+            break;
+          }
+        }
+      }
+    }
+
+    if (targetKey && this.freezeTimers.has(targetKey)) {
+      const entry = this.freezeTimers.get(targetKey);
       const timerId = entry?.timerId || entry;
       clearTimeout(timerId);
-      this.freezeTimers.delete(key);
+      this.freezeTimers.delete(targetKey);
 
-      let candle = entry?.candle || this.candles.get(key);
+      let candle = entry?.candle;
       if (!candle) {
-        const list = this.series.get(key);
-        if (list && list.length > 0) candle = list[list.length - 1];
+        candle = this.candles.get(seriesKey);
+        if (!candle) {
+          const list = this.series.get(seriesKey);
+          if (list && list.length > 0) candle = list[list.length - 1];
+        }
       }
-      if (candle && candle.closed && !candle.frozen) {
-        candle.closed = false;
-        this._logFlight("CANDLE_REOPENED", {
-          symbol,
-          timeframe,
-          timestamp: candle.timestamp,
-          reason: "TICK_DURANTE_FREEZE_TIMER",
-        });
-      }
+
+      this._logFlight("CANDLE_REOPENED", {
+        symbol,
+        timeframe,
+        timestamp: candle ? candle.timestamp : timestamp,
+        reason: "TICK_DURANTE_FREEZE_TIMER",
+      });
     }
   }
 
@@ -284,9 +303,6 @@ export class CandleStore {
           frozen: true,
         };
       }
-
-      // Se chegar tick novo no candle "quase congelado" (timer ativo), cancela timer e reabre
-      this.cancelFreezeTimer(candle.symbol, candle.timeframeSeconds);
 
       last.high = Math.max(last.high, candle.high);
       last.low = Math.min(last.low, candle.low);

@@ -96,7 +96,11 @@ export class SignalLifecycle {
     }
 
     if (lc.phase === Phase.SCANNING && s >= this.cfg.DECISION_START_SEC) {
-      lc.phase = Phase.DECIDING;
+      if (s > this.cfg.DECISION_END_SEC) {
+        this._set(lc, Phase.NO_ENTRY);
+      } else {
+        lc.phase = Phase.DECIDING;
+      }
     }
 
     if (lc.phase === Phase.DECIDING) {
@@ -174,10 +178,54 @@ export class SignalLifecycle {
     const trade = this.byKey.get(this._key(pair, tf, formingTs)) || null;
     const prev = this.byKey.get(this._key(pair, tf, formingTs - tf)) || null;
     const lastResult = prev && prev.phase === Phase.SETTLED && nowSec - prev.settledAt <= this.cfg.RESULT_HOLD_SEC ? prev : null;
-    const strip = (lc) => lc && { id: lc.id, pair: lc.pair, tf: lc.tf, formingTs: lc.formingTs, targetTs: lc.targetTs,
-      phase: lc.phase, direction: lc.direction, lockedAt: lc.lockedAt, entryPrice: lc.entryPrice,
-      closePrice: lc.closePrice, result: lc.result, reason: lc.reason,
-      probability: lc.snapshot?.probability ?? null, subStrategy: lc.snapshot?.subStrategy ?? null };
+
+    const calcRemaining = (lc) => {
+      if (!lc) return 0;
+      if (lc.phase === Phase.PRE_SIGNAL) return Math.max(0, Math.ceil(lc.targetTs - nowSec));
+      if (lc.phase === Phase.ENTRY_NOW) return Math.max(0, Math.ceil((lc.targetTs + (this.cfg?.ENTRY_WINDOW_SEC ?? 5)) - nowSec));
+      if (lc.phase === Phase.IN_TRADE) return Math.max(0, Math.ceil((lc.targetTs + lc.tf) - nowSec));
+      return 0;
+    };
+
+    const strip = (lc) => {
+      if (!lc) return null;
+      const snap = lc.snapshot || {};
+      const prob = snap.probability ?? lc.probability ?? null;
+      const consProb = snap.conservativeProbability ?? prob;
+      const edge = snap.edge ?? 0;
+      const quality = snap.quality ?? 0;
+      const subStrat = snap.subStrategy ?? snap.strategyName ?? lc.subStrategy ?? null;
+      const stratName = snap.strategyName ?? snap.subStrategy ?? lc.strategyName ?? subStrat;
+      const reasons = snap.reasons ?? [];
+      const payout = snap.payout ?? 0.80;
+
+      return {
+        id: lc.id,
+        pair: lc.pair,
+        symbol: lc.pair,
+        tf: lc.tf,
+        formingTs: lc.formingTs,
+        targetTs: lc.targetTs,
+        phase: lc.phase,
+        direction: lc.direction,
+        lockedAt: lc.lockedAt,
+        entryPrice: lc.entryPrice,
+        closePrice: lc.closePrice,
+        result: lc.result,
+        reason: lc.reason,
+        probability: prob,
+        conservativeProbability: consProb,
+        edge,
+        quality,
+        subStrategy: subStrat,
+        strategyName: stratName,
+        reasons,
+        payout,
+        secondsRemaining: calcRemaining(lc),
+        snapshot: lc.snapshot ? { ...lc.snapshot } : null,
+      };
+    };
+
     return {
       current: strip(current),
       trade: trade && trade.direction ? strip(trade) : null,

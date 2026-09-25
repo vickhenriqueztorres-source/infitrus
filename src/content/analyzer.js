@@ -254,6 +254,8 @@ export class MarketAnalyzer {
     this.lifecycle = new SignalLifecycle();
     this.lastDecideAt = 0;
     this.lastCachedDecision = null;
+    this.decisionsBySymbol = new Map();
+    this.lightMetricsBySymbol = new Map();
     this.currentLifecycleSnapshot = null;
     this.panel = null;
 
@@ -881,6 +883,7 @@ export class MarketAnalyzer {
         if (decision && (decision.action === "CALL" || decision.action === "PUT" || decision.action === "BUY" || decision.action === "SELL")) {
           const action = decision.action === "BUY" ? "CALL" : decision.action === "SELL" ? "PUT" : decision.action;
           const normalizedDecision = { ...decision, action, symbol: pair };
+          this.decisionsBySymbol.set(pair, normalizedDecision);
           if (pair === this.currentSymbol) {
             this.lastCachedDecision = normalizedDecision;
           }
@@ -1314,8 +1317,10 @@ export class MarketAnalyzer {
         reasons: ["Direção pré-sinal confirmada na virada da vela"],
       };
       if (!decision.action) decision.action = existingLc.direction;
+      const normalized = { ...decision, symbol: pair };
+      this.decisionsBySymbol.set(pair, normalized);
       if (pair === this.currentSymbol) {
-        this.lastCachedDecision = { ...decision, symbol: pair };
+        this.lastCachedDecision = normalized;
       }
     } else {
       const microMetrics = this.intraminuteTracker.getCurrentMetrics(pair, tf);
@@ -1334,8 +1339,12 @@ export class MarketAnalyzer {
 
       const dur = ((typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now()) - t0;
       this._recordEvalDuration(dur);
-      if (pair === this.currentSymbol && decision) {
-        this.lastCachedDecision = { ...decision, symbol: pair };
+      if (decision) {
+        const normalized = { ...decision, symbol: pair };
+        this.decisionsBySymbol.set(pair, normalized);
+        if (pair === this.currentSymbol) {
+          this.lastCachedDecision = normalized;
+        }
       }
     }
     const nowWallSec = marketClock.nowSec();
@@ -1500,14 +1509,12 @@ export class MarketAnalyzer {
     this.updatePanelDisplay({ immediate: true });
   }
 
-  updatePanelDisplay({ immediate = false } = {}) {
-    if (this._isDestroyed) return;
-
+  buildPanelData() {
     const domSymbol = detectActiveSymbolFromDOM();
 
     // Se NÃO há canal ativo no activeChannel:
     if (!this.currentSymbol) {
-      const stateObj = {
+      return {
         tabId: this.tabId,
         windowId: this.windowId,
         symbol: null,
@@ -1533,12 +1540,6 @@ export class MarketAnalyzer {
         clockOffsetMs: marketClock.offsetMs,
         updatedAt: Date.now(),
       };
-
-      if (this.panel) {
-        this.panel.update(stateObj);
-      }
-      this.saveMarketStateToStorage(stateObj, { immediate });
-      return;
     }
 
     const symbolsMap = {};
@@ -1583,24 +1584,27 @@ export class MarketAnalyzer {
       const isActiveSym = sym === this.currentSymbol;
       const now = Date.now();
 
-      let light = this._cachedLightMetrics;
-      if (isActiveSym) {
-        if (!light || (now - this._lastLightMetricsAt >= 2000)) {
-          this._lastLightMetricsAt = now;
-          this._cachedLightMetrics = this.registry.get(sym).evaluateLight({
+      let light = this.lightMetricsBySymbol.get(sym);
+      const lastLightAt = this._lastLightMetricsAtBySymbol?.get(sym) || 0;
+      if (!light || (now - lastLightAt >= 2000)) {
+        if (!this._lastLightMetricsAtBySymbol) this._lastLightMetricsAtBySymbol = new Map();
+        this._lastLightMetricsAtBySymbol.set(sym, now);
+        try {
+          light = this.registry.get(sym).evaluateLight({
             symbol: sym,
             timeframeSeconds: this.timeframeSeconds,
             candles: closedCandles,
             microMetrics,
             isReady,
           });
-          light = this._cachedLightMetrics;
-        }
+          this.lightMetricsBySymbol.set(sym, light);
+        } catch (_) {}
       }
 
-      const cached = (isActiveSym && this.lastCachedDecision && this.lastCachedDecision.symbol === sym)
-        ? this.lastCachedDecision
-        : null;
+      const cached = this.decisionsBySymbol.get(sym) ||
+        ((isActiveSym && this.lastCachedDecision && this.lastCachedDecision.symbol === sym)
+          ? this.lastCachedDecision
+          : null);
 
       const qReport = {
         action: cached?.action || "WAIT",
@@ -1612,7 +1616,7 @@ export class MarketAnalyzer {
         ev: cached?.ev ?? 0,
         edge: cached?.edge ?? 0,
         quality: cached?.quality ?? 0,
-        conservativeProbability: cached?.conservativeProbability ?? 0.50,
+        conservativeProbability: cached?.conservativeProbability ?? cached?.probability ?? 0.50,
         regime: light?.regime || cached?.regime || "RANGE_STABLE",
         marketStability: light?.marketStability ?? cached?.marketStability ?? 1.0,
         uncertainty: light?.uncertainty ?? cached?.uncertainty ?? 0.20,
@@ -1652,6 +1656,15 @@ export class MarketAnalyzer {
               : "PRE-SEÑAL")
         : "ESCANEANDO";
 
+      // Métricas determinísticas imutáveis de acordo com a fase:
+      // Se há um item ativo (trade em curso ou pré-sinal), suas métricas congeladas têm prioridade absoluta
+      const itemEdge = activeItem?.edge ?? (activeItem?.snapshot?.edge ?? qReport.edge);
+      const itemQuality = activeItem?.quality ?? (activeItem?.snapshot?.quality ?? qReport.quality);
+      const itemProb = activeItem?.conservativeProbability ?? activeItem?.probability ?? (activeItem?.snapshot?.conservativeProbability ?? activeItem?.snapshot?.probability ?? (qReport.conservativeProbability ?? qReport.probability));
+      const itemSubStrategy = activeItem?.subStrategy ?? activeItem?.strategyName ?? (activeItem?.snapshot?.subStrategy ?? activeItem?.snapshot?.strategyName ?? qReport.subStrategy);
+      const itemStrategyName = activeItem?.strategyName ?? activeItem?.subStrategy ?? (activeItem?.snapshot?.strategyName ?? activeItem?.snapshot?.subStrategy ?? qReport.strategyName);
+      const itemReasons = (activeItem?.reasons && activeItem.reasons.length > 0) ? activeItem.reasons : ((activeItem?.snapshot?.reasons && activeItem.snapshot.reasons.length > 0) ? activeItem.snapshot.reasons : qReport.reasons);
+
       symbolsMap[sym] = {
         frameStatus: typeof window !== "undefined" && window !== window.top ? "iframe conectado" : "conectado",
         wsStatus: this.socketStatus,
@@ -1659,8 +1672,8 @@ export class MarketAnalyzer {
         pair: sym,
         action: displayAction,
         rawAction: qReport.action,
-        strategyName: qReport.strategyName,
-        subStrategy: qReport.subStrategy,
+        strategyName: itemStrategyName,
+        subStrategy: itemSubStrategy,
         correlationGroup: qReport.correlationGroup,
         timeframe: `${this.timeframeSeconds / 60} minuto(s)`,
         timeframeSeconds: this.timeframeSeconds,
@@ -1674,24 +1687,24 @@ export class MarketAnalyzer {
         lifecycle,
         quantAction: displayAction,
         quantLabel: displayLabel,
-        quantProbability: qReport.probability,
+        quantProbability: itemProb,
         quantEV: qReport.ev,
-        edge: qReport.edge,
-        quality: qReport.quality,
-        conservativeProbability: qReport.conservativeProbability,
+        edge: itemEdge,
+        quality: itemQuality,
+        conservativeProbability: itemProb,
         regime: qReport.regime,
         marketStability: qReport.marketStability,
         uncertainty: qReport.uncertainty,
         strategiesResults: qReport.strategiesResults || [],
         subStrategiesResults: qReport.subStrategiesResults || [],
         microstructure: microMetrics,
-        quantReasons: qReport.reasons || [],
+        quantReasons: itemReasons,
         payout: this.registry.get(sym).payout,
         signalsHistory: this.signalAuditor.getSignals().slice(0, 20),
         stats: this.signalAuditor.getStats(),
         signal: displayAction !== "WAIT" ? displayAction : "WAIT",
         signalLabel: displayLabel,
-        signalReasons: qReport.reasons || [],
+        signalReasons: itemReasons,
         executionMoment: "AT_CANDLE_OPEN",
         indicators: cSignal?.indicators || {},
         candleTimestamp: lastCandle?.timestamp || Math.floor(marketClock.nowSec()),
@@ -1722,10 +1735,15 @@ export class MarketAnalyzer {
       updatedAt: Date.now(),
     };
 
+    return stateObj;
+  }
+
+  updatePanelDisplay({ immediate = false } = {}) {
+    if (this._isDestroyed) return;
+    const stateObj = this.buildPanelData();
     if (this.panel) {
       this.panel.update(stateObj);
     }
-
     this.saveMarketStateToStorage(stateObj, { immediate });
   }
 

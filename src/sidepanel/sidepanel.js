@@ -209,24 +209,49 @@ function renderSignalCard(data) {
     lastLifecycle = data.lifecycle;
   }
 
+  const lc = data?.lifecycle;
+  const isPre = lc?.current?.phase === "PRE_SIGNAL";
+  const isTrade = lc?.trade && ["ENTRY_NOW", "IN_TRADE"].includes(lc.trade.phase);
+  const activeItem = isPre ? lc.current : (isTrade ? lc.trade : null);
+
+  const subStrategy = activeItem?.subStrategy || activeItem?.strategyName || (activeItem?.snapshot?.subStrategy || activeItem?.snapshot?.strategyName) || data?.subStrategy || data?.strategyName || "21 SUBESTRATEGIAS";
   const stratBadge = document.getElementById("signal-strategy-badge");
   if (stratBadge) {
-    stratBadge.textContent = (data?.subStrategy || data?.strategyName || "21 SUBESTRATEGIAS").toUpperCase();
+    stratBadge.textContent = subStrategy.toUpperCase();
   }
 
-  const prob = Number(data?.conservativeProbability || data?.probability || data?.quantProbability || 0.5);
-  const edge = Number(data?.edge ?? 0);
-  const qual = Number(data?.quality ?? 0);
+  const prob = Number(
+    activeItem?.conservativeProbability ??
+    activeItem?.probability ??
+    (activeItem?.snapshot?.conservativeProbability ?? activeItem?.snapshot?.probability) ??
+    data?.conservativeProbability ??
+    data?.probability ??
+    data?.quantProbability ??
+    0.5
+  );
+  const edge = Number(
+    activeItem?.edge ??
+    (activeItem?.snapshot?.edge) ??
+    data?.edge ??
+    0
+  );
+  const qual = Number(
+    activeItem?.quality ??
+    (activeItem?.snapshot?.quality) ??
+    data?.quality ??
+    0
+  );
   const stats = data?.stats || {};
+  const hasActiveSignal = Boolean(activeItem && activeItem.direction && activeItem.direction !== "WAIT");
 
   const probEl = document.getElementById("sig-prob");
-  if (probEl) probEl.textContent = data?.action && data.action !== "WAIT" ? `${(prob * 100).toFixed(0)}%` : "--%";
+  if (probEl) probEl.textContent = (hasActiveSignal || (data?.action && data.action !== "WAIT")) ? `${(prob * 100).toFixed(0)}%` : "--%";
 
   const edgeEl = document.getElementById("sig-edge");
-  if (edgeEl) edgeEl.textContent = data?.action && data.action !== "WAIT" ? `${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(1)}%` : "--%";
+  if (edgeEl) edgeEl.textContent = (hasActiveSignal || (data?.action && data.action !== "WAIT")) ? `${edge >= 0 ? "+" : ""}${(edge * 100).toFixed(1)}%` : "--%";
 
   const qualEl = document.getElementById("sig-qual");
-  if (qualEl) qualEl.textContent = data?.action && data.action !== "WAIT" ? `${(qual * 100).toFixed(0)}%` : "--%";
+  if (qualEl) qualEl.textContent = (hasActiveSignal || (data?.action && data.action !== "WAIT")) ? `${(qual * 100).toFixed(0)}%` : "--%";
 
   const wrEl = document.getElementById("sig-wr");
   if (wrEl) wrEl.textContent = stats.total > 0 ? `${Number(stats.winRate || 0).toFixed(0)}%` : "--%";
