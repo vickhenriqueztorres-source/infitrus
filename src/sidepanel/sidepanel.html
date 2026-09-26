@@ -31,19 +31,20 @@
     .signal-card.is-in-trade.is-put{border-color:rgba(255,90,110,.8);box-shadow:0 0 20px rgba(255,90,110,.25)}
     .signal-card.is-wait{border-color:var(--border);background:var(--surface)}
     /* Destaque Gigante de Ativo & Ordem (Global Hero) */
-    .signal-asset-hero{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;margin-bottom:10px;background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.08);border-radius:8px;gap:8px}
-    .hero-asset-left{display:flex;align-items:baseline;gap:6px;overflow:hidden}
-    .hero-label{font-size:8.5px;font-weight:700;color:var(--steel,#8A9BA3);letter-spacing:.06em}
-    .hero-asset-name{font-size:16px;font-weight:900;color:#FFFFFF;letter-spacing:.02em;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .hero-tf-badge{font-size:8.5px;font-weight:700;padding:1px 5px;border-radius:4px;background:rgba(255,255,255,.08);color:var(--ice,#E6EEF0)}
-    .hero-action-badge{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:6px;font-size:12px;font-weight:900;letter-spacing:.04em;white-space:nowrap;transition:all .2s ease}
+    .signal-asset-hero{display:flex;flex-direction:column;align-items:stretch;padding:10px 12px;margin-bottom:10px;background:rgba(0,0,0,.42);border:1px solid rgba(255,255,255,.10);border-radius:8px;gap:7px}
+    .hero-asset-left{display:flex;align-items:center;gap:8px;width:100%}
+    .hero-label{font-size:10px;font-weight:700;color:var(--steel,#8A9BA3);letter-spacing:.06em;flex-shrink:0}
+    .hero-asset-name{font-size:22px;font-weight:900;color:#FFFFFF;letter-spacing:.03em;text-transform:uppercase;line-height:1.15;flex:1;overflow-wrap:anywhere}
+    .hero-tf-badge{font-size:10px;font-weight:800;padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.10);color:var(--ice,#E6EEF0);flex-shrink:0}
+    .hero-action-badge{display:flex;align-items:center;justify-content:center;width:100%;gap:6px;padding:6px 10px;border-radius:6px;font-size:13px;font-weight:900;letter-spacing:.04em;white-space:nowrap;transition:all .2s ease}
+    .asset-row #asset{font-size:15px;font-weight:800;color:#FFFFFF;letter-spacing:.02em}
     .hero-action-badge.call{background:rgba(63,224,197,.22);border:1.5px solid #3FE0C5;color:#3FE0C5;box-shadow:0 0 10px rgba(63,224,197,.3)}
     .hero-action-badge.put{background:rgba(255,90,110,.22);border:1.5px solid #FF5A6E;color:#FF5A6E;box-shadow:0 0 10px rgba(255,90,110,.3)}
-    .hero-action-badge.wait{background:rgba(138,155,163,.12);border:1px solid var(--border);color:var(--steel,#8A9BA3);font-size:10px;font-weight:700}
+    .hero-action-badge.wait{background:rgba(138,155,163,.12);border:1px solid var(--border);color:var(--steel,#8A9BA3);font-size:11px;font-weight:700}
     .hero-action-badge.execute{animation:pulse-execute .5s infinite alternate}
-    @keyframes pulse-execute{0%{transform:scale(1);box-shadow:0 0 8px rgba(63,224,197,.4)}100%{transform:scale(1.04);box-shadow:0 0 16px rgba(63,224,197,.7)}}
+    @keyframes pulse-execute{0%{transform:scale(1);box-shadow:0 0 8px rgba(63,224,197,.4)}100%{transform:scale(1.02);box-shadow:0 0 16px rgba(63,224,197,.7)}}
     .hero-action-badge.execute.put{animation:pulse-execute-put .5s infinite alternate}
-    @keyframes pulse-execute-put{0%{transform:scale(1);box-shadow:0 0 8px rgba(255,90,110,.4)}100%{transform:scale(1.04);box-shadow:0 0 16px rgba(255,90,110,.7)}}
+    @keyframes pulse-execute-put{0%{transform:scale(1);box-shadow:0 0 8px rgba(255,90,110,.4)}100%{transform:scale(1.02);box-shadow:0 0 16px rgba(255,90,110,.7)}}
     .signal-badge-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
     .signal-badge{padding:3px 9px;border-radius:5px;font-size:11px;font-weight:800;letter-spacing:.05em}
     .signal-badge.call{background:rgba(63,224,197,.2);color:#3FE0C5;border:1px solid #3FE0C5}
