@@ -205,10 +205,11 @@ export class QuantPortfolio {
     });
 
     // 4. Competitive Edge Selector:
-    // Ranqueamento por AdjustedEdge, resolução de conflitos (ΔEdge >= 1.0 p.p.) e bônus de confluência inter-famílias
+    // Ranqueamento por AdjustedEdge, resolução de conflitos (ΔEdge >= 3.0 p.p.) e veto covariante 21x21
     const decision = this.edgeSelector.selectCompetitive({
       candidates: pooledCandidates,
       payout: this.payout,
+      opportunityPool: this.opportunityPool,
       qualityContext: {
         gapCount,
         isStale,
@@ -390,11 +391,17 @@ export class QuantPortfolio {
     const prob = snapshot.conservativeProbability ?? snapshot.probability ?? 0.5;
     const outcomeUp = won ? (direction === "CALL" ? 1 : 0) : (direction === "CALL" ? 0 : 1);
 
+    const coActive = Array.isArray(snapshot.subStrategiesResults)
+      ? snapshot.subStrategiesResults
+          .filter((s) => s && s.direction === direction && s.subStrategy)
+          .map((s) => s.subStrategy)
+      : [];
+
     if (subStrategy && this.opportunityPool) {
-      this.opportunityPool.recordOutcome(subStrategy, direction, prob, outcomeUp);
+      this.opportunityPool.recordOutcome(subStrategy, direction, prob, outcomeUp, coActive);
     }
     if (this.familyAnalogy?.update) {
-      this.familyAnalogy.update(null, outcomeUp);
+      this.familyAnalogy.update(snapshot.bayesContext || null, outcomeUp);
     }
   }
 

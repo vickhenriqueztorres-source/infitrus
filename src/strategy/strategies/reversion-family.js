@@ -60,33 +60,37 @@ export class ReversionFamily {
     const zScore = featureMap.zScore20 !== undefined ? featureMap.zScore20 : 0;
     const pressure = microMetrics?.pressure || 0;
     const pressureVel = microMetrics?.pressureVelocity || 0;
+    const kinematicRejection = microMetrics?.kinematicRejection || 0;
+    const tickPriceAccel = microMetrics?.priceAcceleration || 0;
 
     const regimeComp = regime === "ranging" || regime === "compression" ? 1.05 : regime === "trend" ? 0.90 : 1.0;
 
     // =========================================================================
-    // 2A — STATISTICAL EXHAUSTION (Z-Score Contínuo + Perda de Inércia)
+    // 2A — STATISTICAL EXHAUSTION (Z-Score Contínuo + Desaceleração v>0, a<<0)
     // =========================================================================
     {
       const absZ = Math.abs(zScore);
       let statDir = null;
       let statScore = 0;
 
-      // Intensidades contínuas: zStrength, wickStrength, momentumDecay, pressureDecay
+      // Intensidades contínuas: zStrength, wickStrength, momentumDecay, pressureDecay + kinematicRejection
       if (zScore > 1.25) {
         const zStrength = clamp((absZ - 1.25) / 1.5, 0.2, 1.0);
         const wickStrength = clamp(upperWick / 0.40, 0, 1.0);
-        const momentumDecay = accel < 0 ? 0.20 : 0.05;
+        const momentumDecay = accel < 0 || tickPriceAccel < 0 ? 0.20 : 0.05;
         const pressureDecay = pressureVel < 0 || pressure < 0.25 ? 0.20 : 0.05;
+        const kinRejBonus = kinematicRejection < 0 ? Math.abs(kinematicRejection) * 0.12 : 0;
 
-        statScore = zStrength * 0.35 + wickStrength * 0.25 + momentumDecay + pressureDecay;
+        statScore = zStrength * 0.35 + wickStrength * 0.25 + momentumDecay + pressureDecay + kinRejBonus;
         if (statScore >= 0.52) statDir = "PUT";
       } else if (zScore < -1.25) {
         const zStrength = clamp((absZ - 1.25) / 1.5, 0.2, 1.0);
         const wickStrength = clamp(lowerWick / 0.40, 0, 1.0);
-        const momentumDecay = accel > 0 ? 0.20 : 0.05;
+        const momentumDecay = accel > 0 || tickPriceAccel > 0 ? 0.20 : 0.05;
         const pressureDecay = pressureVel > 0 || pressure > -0.25 ? 0.20 : 0.05;
+        const kinRejBonus = kinematicRejection > 0 ? kinematicRejection * 0.12 : 0;
 
-        statScore = zStrength * 0.35 + wickStrength * 0.25 + momentumDecay + pressureDecay;
+        statScore = zStrength * 0.35 + wickStrength * 0.25 + momentumDecay + pressureDecay + kinRejBonus;
         if (statScore >= 0.52) statDir = "CALL";
       }
 

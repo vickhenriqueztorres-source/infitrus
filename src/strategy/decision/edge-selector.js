@@ -1,45 +1,37 @@
 /**
- * edge-selector.js - Tomador de Decisão: Seleção Competitiva por Edge entre Estratégias Paralelas
- * Oracle Quant Signals
+ * edge-selector.js - Tomador de Decisão: Leilão de AdjustedEdge, Veto Covariante 21x21 e Bayes Condicional
+ * Oracle Quant Signals — Active Quant Optimizer
  *
- * Princípios da Nova Arquitetura:
- * 1. Estratégias Paralelas: Recebe candidatos independentes das 5 famílias (~21 subestratégias).
- * 2. Seleção Competitiva: A subestratégia com maior AdjustedEdge é eleita:
- *    AdjustedEdge = Edge * Quality * MaturityFactor * RegimeCompatibility
- * 3. Resolução de Conflitos:
- *    - Se houver CALL e PUT simultâneos: ΔEdge = |AdjustedEdge_CALL - AdjustedEdge_PUT|.
- *    - Se ΔEdge >= 1.0 p.p. (0.010): a mais forte vence e emite o sinal.
- *    - Se ΔEdge < 1.0 p.p.: veto por conflito equilibrado (AGUARDAR).
- * 4. Bônus de Confluência Inter-Famílias (Ortogonal):
- *    - Se 2+ famílias ortogonais distintas concordarem, bonifica Quality e Confidence.
- *    - NUNCA infla a probabilidade calibrada artificialmente.
- *    - Subestratégias da mesma família não contam como confirmações independentes.
- * 5. Vetos Estritamente Operacionais: STALE_DATA (>15s), GAPS anormais (>2) ou dados corrompidos.
+ * Fundamentos Matemáticos:
+ * 1. Seleção Competitiva Ponderada:
+ *    AdjustedEdge_i = Edge_i * Quality_i * MaturityFactor_i * RegimeCompatibility_i * ω_i
+ * 2. Veto de Conflito Direcional:
+ *    ΔEdge = |AdjustedEdge_CALL - AdjustedEdge_PUT| < conflictThreshold -> Veto Neutro (WAIT).
+ * 3. Sistema de Veto Matemático (Determinante de Covariância & Bayes Condicional):
+ *    - Se S_1 e S_2 disparam juntas:
+ *      P(Win | S_1 ∩ S_2) = [P(S_1 ∩ S_2 | Win) * P(Win)] / P(S_1 ∩ S_2)
+ *    - Determinante de Independência 2x2: det(R) = 1 - ρ_{12}^2.
+ *    - Se S_1 e S_2 são correlacionadas na derrota (P(Loss | S_1 ∩ S_2) > 0.52 com co-ativações empíricas),
+ *      o AdjustedEdge sofre contração covariante e a confluência é vetada.
  */
 
 import { clamp } from "../detectors/detector-types.js";
 
 export class EdgeSelector {
   constructor(config = {}) {
-    this.minEdge = config.minEdge !== undefined ? config.minEdge : 0.025; // Mínimo +2.5% de vantagem sobre breakeven
+    this.minEdge = config.minEdge !== undefined ? config.minEdge : 0.025;
     this.minQuality = config.minQuality !== undefined ? config.minQuality : 0.65;
-    this.conflictThreshold = config.conflictThreshold !== undefined ? config.conflictThreshold : 0.030; // 3.0 p.p. de desempate
+    this.conflictThreshold = config.conflictThreshold !== undefined ? config.conflictThreshold : 0.030;
     this.requireConfluence = config.requireConfluence !== undefined ? config.requireConfluence : true;
   }
 
   /**
-   * Leilão competitivo entre os candidatos gerados pelas 5 famílias / 21 subestratégias autônomas.
-   *
-   * @param {Object} params
-   * @param {Array<Object>} params.candidates - Resultados individuais ou OpportunityObjects
-   * @param {number} [params.payout=0.80]
-   * @param {Object} [params.qualityContext={}]
-   * @returns {Object} Decisão consolidada
+   * Leilão competitivo entre os candidatos das 5 famílias / 21 subestratégias autônomas.
    */
-  selectCompetitive({ candidates = [], payout = 0.80, qualityContext = {} }) {
+  selectCompetitive({ candidates = [], payout = 0.80, qualityContext = {}, opportunityPool = null }) {
     const breakeven = 1 / (1 + payout);
 
-    // 1. Verificação de Vetos Operacionais Estritos
+    // 1. Vetos Operacionais Estritos
     const criticalGaps = qualityContext.gapCount > 2;
     const isCorrupted = qualityContext.isCorrupted === true;
     const isStale = qualityContext.isStale === true || (qualityContext.staleTime && qualityContext.staleTime > 15000);
@@ -59,9 +51,11 @@ export class EdgeSelector {
         payout,
         breakeven: Number(breakeven.toFixed(4)),
         reasons: [
-          isStale ? "Veto Operacional: Feed de dados congelado (>15s sem ticks)" :
-          criticalGaps ? "Veto Operacional: Lacunas anormais de dados (>2 gaps)" :
-          "Veto Operacional: Integridade de dados corrompida",
+          isStale
+            ? "Veto Operacional: Feed de dados congelado (>15s sem ticks)"
+            : criticalGaps
+            ? "Veto Operacional: Lacunas anormais de dados (>2 gaps)"
+            : "Veto Operacional: Integridade de dados corrompida",
         ],
         isVetoed: true,
         isConflict: false,
@@ -71,9 +65,9 @@ export class EdgeSelector {
       };
     }
 
-    // 2. Normaliza e filtra candidatos válidos com Edge real e qualidade mínima
+    // 2. Normaliza e filtra candidatos válidos
     const validCandidates = [];
-    for (const raw of (candidates || [])) {
+    for (const raw of candidates || []) {
       if (!raw) continue;
       const action = raw.direction || raw.action;
       if (action !== "CALL" && action !== "PUT") continue;
@@ -82,10 +76,13 @@ export class EdgeSelector {
       const quality = Number.isFinite(raw.quality) ? raw.quality : 0.60;
       if (edge < this.minEdge || quality < this.minQuality) continue;
 
-      // AdjustedEdge: se já não estiver pré-calculado
       const maturityFactor = raw.maturityScore || (raw.maturity === "ACTIVE" ? 1.0 : raw.maturity === "LEARNING" ? 0.85 : 0.65);
       const regimeFactor = raw.regimeCompatibility || 1.0;
-      const adjustedEdge = raw.adjustedEdge !== undefined ? raw.adjustedEdge : Number((edge * quality * maturityFactor * regimeFactor).toFixed(4));
+      const omegaWeight = raw.omegaWeight || 1.0;
+      const adjustedEdge =
+        raw.adjustedEdge !== undefined
+          ? raw.adjustedEdge
+          : Number((edge * quality * maturityFactor * regimeFactor * omegaWeight).toFixed(4));
 
       if (adjustedEdge <= 0) continue;
 
@@ -154,14 +151,12 @@ export class EdgeSelector {
     if (bestCall && bestPut) {
       conflictDelta = Math.abs(bestCall.adjustedEdge - bestPut.adjustedEdge);
       if (conflictDelta >= this.conflictThreshold) {
-        // O lado com maior AdjustedEdge supera o conflito
         winner = bestCall.adjustedEdge > bestPut.adjustedEdge ? bestCall : bestPut;
         const loser = winner === bestCall ? bestPut : bestCall;
         reasons.push(
           `Superou conflito: ${winner.name} (${winner.action} AdjEdge: +${(winner.adjustedEdge * 100).toFixed(1)}%) sobre ${loser.name} (${loser.action} AdjEdge: +${(loser.adjustedEdge * 100).toFixed(1)}%) [Δ: +${(conflictDelta * 100).toFixed(1)}%]`
         );
       } else {
-        // Conflito equilibrado (< 1.0 p.p.) -> Neutralização prudencial
         return {
           action: "WAIT",
           label: "AGUARDAR (Conflito Direcional)",
@@ -193,9 +188,8 @@ export class EdgeSelector {
       winner = bestCall || bestPut;
     }
 
-    // 5. Verificação de Confluência Ortogonal entre Famílias Distintas
+    // 5. Verificação de Confluência Ortogonal e Matriz de Covariância 21x21
     const sameDirectionCandidates = winner.action === "CALL" ? callCandidates : putCandidates;
-    const oppositeCandidates = winner.action === "CALL" ? putCandidates : callCandidates;
     const orthogonalGroups = new Set();
     const orthogonalFamilies = [];
 
@@ -207,37 +201,69 @@ export class EdgeSelector {
       }
     }
 
+    // Avalia o Determinante de Covariância e Probabilidade Condicional P(Loss | S_1 ∩ S_2)
+    let maxConditionalLossRate = 0.4444;
+    let totalCorrelationPenalty = 0;
+    let pairCount = 0;
+
+    if (opportunityPool && typeof opportunityPool.getPairwiseDependency === "function" && sameDirectionCandidates.length >= 2) {
+      for (let i = 0; i < sameDirectionCandidates.length; i++) {
+        for (let j = i + 1; j < sameDirectionCandidates.length; j++) {
+          const dep = opportunityPool.getPairwiseDependency(
+            sameDirectionCandidates[i].subStrategy,
+            sameDirectionCandidates[j].subStrategy
+          );
+          if (dep.coActivations >= 3.0) {
+            if (dep.conditionalLossRate > maxConditionalLossRate) {
+              maxConditionalLossRate = dep.conditionalLossRate;
+            }
+            totalCorrelationPenalty += dep.correlationPenalty;
+            pairCount++;
+          }
+        }
+      }
+    }
+
+    const avgCorrPenalty = pairCount > 0 ? totalCorrelationPenalty / pairCount : 0;
+    // Determinante efetivo da matriz de correlação 2x2: det(R) = 1 - rho^2
+    const covarianceDeterminant = Number(clamp(1.0 - avgCorrPenalty * avgCorrPenalty, 0.20, 1.00).toFixed(4));
+    const isCorrelatedInDefeat = maxConditionalLossRate > 0.52;
+
     const isConfluence = orthogonalGroups.size >= 2;
     let finalQuality = winner.quality;
     let finalConfidence = winner.confidence || clamp(winner.quality * 0.9, 0.45, 0.90);
+    let finalAdjustedEdge = winner.adjustedEdge;
 
-    if (isConfluence) {
-      // Bônus em Qualidade e Confiança (NUNCA infla probabilidade bruta ou conservadora)
-      const confluenceBonus = (orthogonalGroups.size - 1) * 0.05;
+    if (isConfluence && !isCorrelatedInDefeat) {
+      // Bônus ponderado pelo Determinante de Covariância det(R)
+      const confluenceBonus = (orthogonalGroups.size - 1) * 0.05 * covarianceDeterminant;
       finalQuality = Number(clamp(finalQuality + confluenceBonus, 0.50, 0.98).toFixed(3));
       finalConfidence = Number(clamp(finalConfidence + confluenceBonus * 1.2, 0.50, 0.98).toFixed(3));
       reasons.push(
-        `Confluência ortogonal de ${orthogonalGroups.size} famílias independentes: ${orthogonalFamilies.join(" + ")}`
+        `Confluência ortogonal de ${orthogonalGroups.size} famílias independentes: ${orthogonalFamilies.join(" + ")} (det(R)=${covarianceDeterminant.toFixed(2)})`
+      );
+    } else if (isCorrelatedInDefeat) {
+      // Penalidade Bayesiana quando S_1 e S_2 são correlacionadas na derrota: AdjustedEdge cai!
+      finalAdjustedEdge = Number((finalAdjustedEdge * (1 - Math.min(0.45, avgCorrPenalty + 0.15))).toFixed(4));
+      reasons.unshift(
+        `Veto Bayesiano Condicional: par correlacionado na derrota (P(Loss|S1∩S2)=${(maxConditionalLossRate * 100).toFixed(1)}%)`
       );
     }
 
     // 5.1 Política de Maturidade e Seletividade Acionável:
     const isShadow = winner.maturity === "SHADOW";
     const sameDirectionActive = sameDirectionCandidates.some((c) => c.maturity && c.maturity !== "SHADOW");
+    const hasConfluence = isConfluence && sameDirectionActive && !isCorrelatedInDefeat;
 
-    // Regra Institucional Estrita:
-    // Um sinal só é ACIONÁVEL para entrada no mercado se contar com CONFLUÊNCIA de 2+ famílias independentes
-    // (com ao menos 1 ACTIVE/LEARNING). Sinais isolados NUNCA operam sozinhos no mercado real.
-    const hasConfluence = isConfluence && sameDirectionActive;
-
-    // Desconto de multicolinearidade: se as únicas 2 famílias em acordo forem MOMENTUM e MICROSTRUCTURE
-    // (que naturalmente se movem juntas na mesma vela), exige edge somado mais rigoroso (>= 5.0%)
+    // Desconto de multicolinearidade estrutural (MOMENTUM + MICROSTRUCTURE)
     let passesCollinearityCheck = true;
     if (orthogonalGroups.size === 2 && orthogonalGroups.has("MOMENTUM") && orthogonalGroups.has("MICROSTRUCTURE")) {
       const combinedEdge = sameDirectionCandidates.reduce((acc, c) => acc + (c.edge || 0), 0);
       if (combinedEdge < 0.050) {
         passesCollinearityCheck = false;
-        reasons.unshift(`Confluência Momentum+Microestrutura insuficiente (Edge somado +${(combinedEdge * 100).toFixed(1)}% < +5.0%): aguardando confirmação estrutural`);
+        reasons.unshift(
+          `Confluência Momentum+Microestrutura insuficiente (Edge somado +${(combinedEdge * 100).toFixed(1)}% < +5.0%): aguardando confirmação estrutural`
+        );
       }
     }
 
@@ -246,13 +272,12 @@ export class EdgeSelector {
     if (!isActionable) {
       if (isShadow && !sameDirectionActive) {
         reasons.unshift(`Oportunidade em SHADOW (${winner.subStrategy || winner.name}): observação analítica sem alerta acionável`);
-      } else if (!hasConfluence) {
+      } else if (!hasConfluence && !isCorrelatedInDefeat) {
         reasons.unshift(`Sinal isolado sem confluência inter-famílias (${orthogonalGroups.size}/2 famílias necessárias): aguardando confirmação`);
       }
     }
 
     // 6. Cálculo do Valor Esperado (EV)
-    // EV = P_cons * Payout - (1 - P_cons) * 1.0
     const activeP = winner.conservativeProbability || winner.conservativeProb || 0.50;
     const ev = Number((activeP * payout - (1 - activeP) * 1.0).toFixed(3));
 
@@ -269,7 +294,8 @@ export class EdgeSelector {
       strategyName,
       correlationGroup: winner.correlationGroup,
       edge: winner.edge,
-      adjustedEdge: winner.adjustedEdge,
+      adjustedEdge: finalAdjustedEdge,
+      covarianceDeterminant,
       ev,
       quality: finalQuality,
       confidence: finalConfidence,
@@ -289,58 +315,47 @@ export class EdgeSelector {
     };
   }
 
-  /**
-   * Método de compatibilidade para suporte ao formato legado de ensemble se necessário.
-   */
   select({ ensembleReport, payout = 0.80, qualityContext = {} }) {
     if (!ensembleReport) {
       return {
         action: "WAIT",
         label: "AGUARDAR",
         edge: 0,
+        adjustedEdge: 0,
+        ev: 0,
         quality: 0,
-        payout,
-        breakeven: 0.556,
-        reasons: ["Dados insuficientes"],
-        isVetoed: false,
+        confidence: 0,
+        reasons: ["Sem relatório de ensemble"],
       };
     }
 
+    const pUp = ensembleReport.probUp ?? 0.50;
+    const pDown = ensembleReport.probDown ?? 0.50;
+    const direction = pUp >= pDown ? "CALL" : "PUT";
+    const rawProb = direction === "CALL" ? pUp : pDown;
+    const consProb = ensembleReport.conservativeProb ?? rawProb;
     const breakeven = 1 / (1 + payout);
-    const { probUp, probDown, conservativeProbUp, conservativeProbDown } = ensembleReport;
+    const edge = Number((consProb - breakeven).toFixed(4));
 
-    const edgeCall = conservativeProbUp - breakeven;
-    const edgePut = conservativeProbDown - breakeven;
-
-    let action = "WAIT";
-    let edge = 0;
-    let label = "AGUARDAR";
-
-    if (edgeCall >= this.minEdge && edgeCall > edgePut) {
-      action = "CALL";
-      edge = Number(edgeCall.toFixed(4));
-      label = `CALL (+${(edge * 100).toFixed(1)}% Edge)`;
-    } else if (edgePut >= this.minEdge && edgePut > edgeCall) {
-      action = "PUT";
-      edge = Number(edgePut.toFixed(4));
-      label = `PUT (+${(edge * 100).toFixed(1)}% Edge)`;
-    }
-
-    const activeP = action === "CALL" ? conservativeProbUp : action === "PUT" ? conservativeProbDown : 0.50;
-    const ev = Number((activeP * payout - (1 - activeP) * 1.0).toFixed(3));
-
-    return {
-      action,
-      label,
-      edge,
-      ev,
-      quality: 0.70,
-      probability: action === "CALL" ? probUp : probDown,
-      conservativeProbability: action === "CALL" ? conservativeProbUp : conservativeProbDown,
-      breakeven: Number(breakeven.toFixed(4)),
+    return this.selectCompetitive({
+      candidates: [
+        {
+          action: direction,
+          direction,
+          name: ensembleReport.dominantEngine || "Ensemble",
+          subStrategy: ensembleReport.dominantEngine || "ENSEMBLE",
+          correlationGroup: "ENSEMBLE",
+          rawProbability: rawProb,
+          calibratedProbability: rawProb,
+          conservativeProbability: consProb,
+          edge,
+          quality: ensembleReport.confidence ?? 0.70,
+          confidence: ensembleReport.confidence ?? 0.70,
+          maturity: "ACTIVE",
+        },
+      ],
       payout,
-      reasons: ["Ensemble legado"],
-      isVetoed: false,
-    };
+      qualityContext,
+    });
   }
 }

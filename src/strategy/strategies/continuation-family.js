@@ -57,14 +57,17 @@ export class ContinuationFamily {
     const dirEfficiency = featureMap.directionalEfficiency || clamp(Math.abs(c0.close - c2.open) / (range0 + range1 + 1e-6), 0, 1);
 
     const pressure = microMetrics?.pressure || 0;
+    const integratedFlow = microMetrics?.integratedFlowPressure !== undefined ? microMetrics.integratedFlowPressure : pressure;
     const pressureVel = microMetrics?.pressureVelocity || 0;
     const pressureAccel = microMetrics?.pressureAcceleration || 0;
+    const kinematicConvergence = microMetrics?.kinematicConvergence || 0;
+    const kinematicRejection = microMetrics?.kinematicRejection || 0;
     const lastTicksDir = microMetrics?.lastTicksDirection || 0;
 
     const regimeComp = regime === "trend" || regime === "expansion" ? 1.05 : regime === "compression" ? 0.85 : 0.95;
 
     // =========================================================================
-    // 1A — IMPULSE CONTINUATION
+    // 1A — IMPULSE CONTINUATION (Com Cinemática Diferencial v(t) e a(t))
     // =========================================================================
     {
       let bullScore = 0;
@@ -72,7 +75,7 @@ export class ContinuationFamily {
       const bullEv = {};
       const bearEv = {};
 
-      if (r1 > 0) {
+      if (r1 > 0 && kinematicRejection >= -0.35) {
         bullScore += 0.20;
         const posFactor = clamp((closePos - 0.50) / 0.50, 0, 1);
         bullScore += 0.25 * posFactor;
@@ -81,12 +84,13 @@ export class ContinuationFamily {
         const rangeFactor = clamp((rangeRatio - 0.85) / 0.40, 0, 1);
         bullScore += 0.15 * rangeFactor;
         if (accel >= 0) bullScore += 0.10;
-        if (pressure > 0.08) bullScore += 0.15 * clamp(pressure / 0.50, 0, 1);
+        if (integratedFlow > 0.08) bullScore += 0.15 * clamp(integratedFlow / 0.50, 0, 1);
+        if (kinematicConvergence > 0) bullScore += 0.08 * kinematicConvergence;
 
         bullEv.r1 = r1;
         bullEv.closePos = closePos;
-        bullEv.pressure = pressure;
-      } else if (r1 < 0) {
+        bullEv.pressure = integratedFlow;
+      } else if (r1 < 0 && kinematicRejection <= 0.35) {
         bearScore += 0.20;
         const posFactor = clamp((0.50 - closePos) / 0.50, 0, 1);
         bearScore += 0.25 * posFactor;
@@ -95,11 +99,12 @@ export class ContinuationFamily {
         const rangeFactor = clamp((rangeRatio - 0.85) / 0.40, 0, 1);
         bearScore += 0.15 * rangeFactor;
         if (accel <= 0) bearScore += 0.10;
-        if (pressure < -0.08) bearScore += 0.15 * clamp(-pressure / 0.50, 0, 1);
+        if (integratedFlow < -0.08) bearScore += 0.15 * clamp(-integratedFlow / 0.50, 0, 1);
+        if (kinematicConvergence < 0) bearScore += 0.08 * Math.abs(kinematicConvergence);
 
         bearEv.r1 = r1;
         bearEv.closePos = closePos;
-        bearEv.pressure = pressure;
+        bearEv.pressure = integratedFlow;
       }
 
       // Exige score robusto (>= 0.70), corpo de vela dominante (>= 0.55) e eficiência direcional real (>= 0.60) para evitar falso impulso

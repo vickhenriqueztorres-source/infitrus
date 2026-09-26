@@ -1,18 +1,18 @@
 /**
- * hierarchical-bayes-engine.js - Motor 1: Bayes Hierárquico com Partial Pooling
- * Oracle Quant Signals
+ * hierarchical-bayes-engine.js - Motor 1: Inferência Beta-Binomial Sequencial com Partial Pooling e Fator de Esquecimento (λ)
+ * Oracle Quant Signals — Active Quant Optimizer
  *
- * Princípio do PRD:
- * "Se o cenário específico possui poucos exemplos, utiliza informação de cenários mais gerais.
- * Isso evita jogar fora oportunidades simplesmente porque a combinação exata apareceu poucas vezes."
- *
- * Arquitetura de Árvore:
- * - Nível 0 (Raiz): Prior Neutro Global (p0 = 0.50)
- * - Nível 1 (Pai): Contexto Macro (Regime de Volatilidade + Direção M3)
- * - Nível 2 (Filho): Cenário Específico (Momentum + Estrutura de Pavio + Sinal de Pressão)
- *
- * Contração Bayesiana (Partial Pooling):
- *   P(CALL | Específico) = (n * P_empirica + m * P_pai) / (n + m)
+ * Fundamentos Matemáticos:
+ * 1. Modelo Conjugado Beta-Binomial Dinâmico com Esquecimento Exponencial (λ < 1):
+ *    - Prior Nível 0 (Raiz): Beta(α_0, β_0) centrado em p_0 = 0.50 (ou ajustado ao breakeven).
+ *    - Atualização Sequencial a cada vela fechada Y_t ∈ {0, 1}:
+ *      α_t = λ * α_{t-1} + Y_t
+ *      β_t = λ * β_{t-1} + (1 - Y_t)
+ * 2. Partial Pooling Hierárquico (Nível 0 -> Nível 1 Pai -> Nível 2 Filho):
+ *    - E[p | Pai]      = (α_pai + m * p_0) / (α_pai + β_pai + m)
+ *    - E[p | Específico] = (α_esp + m * E[p | Pai]) / (α_esp + β_esp + m)
+ * 3. Variância Posterior Analítica Exata:
+ *    Var(p) = (α * β) / ((α + β)^2 * (α + β + 1))
  */
 
 import { clamp } from "../detectors/detector-types.js";
@@ -20,10 +20,11 @@ import { clamp } from "../detectors/detector-types.js";
 export class HierarchicalBayesEngine {
   constructor(config = {}) {
     this.id = "hierarchical_bayes";
-    this.name = "Bayes Hierárquico";
-    this.shrinkageM = config.shrinkageM || 15; // Parâmetro m de contração
+    this.name = "Bayes Hierárquico Beta-Binomial";
+    this.shrinkageM = config.shrinkageM || 15;
+    this.forgettingLambda = config.forgettingLambda || 0.985; // Decaimento para recálculo do market maker OTC
 
-    /** @type {Map<string, { total: number, up: number }>} */
+    /** @type {Map<string, { alpha: number, beta: number, total: number, up: number }>} */
     this.counts = new Map();
   }
 
@@ -35,41 +36,33 @@ export class HierarchicalBayesEngine {
     return `L2_${volatilityState}_${r1Sign}_${bodyDominant ? "DOM" : "NORM"}_${pressureSign}`;
   }
 
+  _updateNode(key, outcomeUp) {
+    if (!key) return;
+    if (!this.counts.has(key)) {
+      this.counts.set(key, { alpha: 0, beta: 0, total: 0, up: 0 });
+    }
+    const rec = this.counts.get(key);
+    const y = outcomeUp ? 1 : 0;
+    rec.alpha = this.forgettingLambda * rec.alpha + y;
+    rec.beta = this.forgettingLambda * rec.beta + (1 - y);
+    rec.total++;
+    if (y === 1) rec.up++;
+  }
+
   /**
-   * Treinamento / atualização online contínua a partir do fechamento da vela anterior.
+   * Atualização Bayesiana sequencial a partir do fechamento da vela anterior.
    *
    * @param {Object} prevContext
    * @param {number} outcomeUp - 1 se a vela subiu, 0 se desceu
    */
   update(prevContext, outcomeUp) {
-    if (!prevContext) return;
-
-    const kParent = prevContext.keyParent;
-    const kSpecific = prevContext.keySpecific;
-
-    if (kParent) {
-      if (!this.counts.has(kParent)) this.counts.set(kParent, { total: 0, up: 0 });
-      const pRec = this.counts.get(kParent);
-      pRec.total++;
-      if (outcomeUp) pRec.up++;
-    }
-
-    if (kSpecific) {
-      if (!this.counts.has(kSpecific)) this.counts.set(kSpecific, { total: 0, up: 0 });
-      const sRec = this.counts.get(kSpecific);
-      sRec.total++;
-      if (outcomeUp) sRec.up++;
-    }
+    if (!prevContext || outcomeUp === 0.5) return;
+    this._updateNode(prevContext.keyParent, outcomeUp);
+    this._updateNode(prevContext.keySpecific, outcomeUp);
   }
 
   /**
-   * Avalia a probabilidade Bayesiana hierárquica para a próxima vela.
-   *
-   * @param {Object} params
-   * @param {Object} params.rawFeatures
-   * @param {string} params.volatilityState
-   * @param {Array} params.candles
-   * @returns {Object}
+   * Avalia a distribuição posterior Beta-Binomial hierárquica para a próxima vela.
    */
   evaluate({ rawFeatures = {}, volatilityState = "normal", candles = [] }) {
     const n = candles.length;
@@ -79,8 +72,10 @@ export class HierarchicalBayesEngine {
         name: this.name,
         probUp: 0.50,
         probDown: 0.50,
+        posteriorStd: 0.05,
         confidence: 0.30,
         sampleSize: 0,
+        parentSampleSize: 0,
         contextKeys: null,
       };
     }
@@ -89,57 +84,98 @@ export class HierarchicalBayesEngine {
     const r3 = rawFeatures.r3 || 0;
     const bodyRatio = rawFeatures.bodyRatio || 0.5;
     const pressure = rawFeatures.pressure || 0;
+    const integratedFlow = rawFeatures.integratedFlowPressure !== undefined ? rawFeatures.integratedFlowPressure : pressure;
 
     const r1Sign = r1 > 0 ? "UP" : r1 < 0 ? "DOWN" : "FLAT";
     const r3Sign = r3 > 0 ? "UP" : r3 < 0 ? "DOWN" : "FLAT";
     const bodyDominant = bodyRatio > 0.65;
-    const pressureSign = pressure > 0.15 ? "POS" : pressure < -0.15 ? "NEG" : "NEUT";
+    const pressureSign = integratedFlow > 0.15 ? "POS" : integratedFlow < -0.15 ? "NEG" : "NEUT";
 
     const keyParent = this._getKeyParent(volatilityState, r3Sign);
     const keySpecific = this._getKeySpecific(volatilityState, r1Sign, bodyDominant, pressureSign);
 
-    // 1. Probabilidade Nível 0 (Raiz)
     const pRoot = 0.50;
+    const m = this.shrinkageM;
 
-    // 2. Probabilidade Nível 1 (Pai) com pooling da Raiz
+    // 1. Nível 1 (Pai) com Partial Pooling da Raiz
     let pParent = pRoot;
     let nParent = 0;
+    let effParent = 0;
     if (this.counts.has(keyParent)) {
       const recP = this.counts.get(keyParent);
       nParent = recP.total;
-      pParent = (recP.up + this.shrinkageM * pRoot) / (recP.total + this.shrinkageM);
+      effParent = recP.alpha + recP.beta;
+      pParent = (recP.alpha + m * pRoot) / (effParent + m);
     }
 
-    // 3. Probabilidade Nível 2 (Específico) com partial pooling do Pai
+    // 2. Nível 2 (Específico) com Partial Pooling do Pai
     let pSpecific = pParent;
     let nSpecific = 0;
+    let effSpecific = 0;
+    let alphaPost = m * pParent;
+    let betaPost = m * (1 - pParent);
+
     if (this.counts.has(keySpecific)) {
       const recS = this.counts.get(keySpecific);
       nSpecific = recS.total;
-      // Contração Bayesiana elegante:
-      pSpecific = (recS.up + this.shrinkageM * pParent) / (recS.total + this.shrinkageM);
-    } else {
-      // Se o cenário nunca ocorreu, herda integralmente a estimativa do cenário pai!
-      pSpecific = pParent;
+      effSpecific = recS.alpha + recS.beta;
+      alphaPost = recS.alpha + m * pParent;
+      betaPost = recS.beta + m * (1 - pParent);
+      pSpecific = alphaPost / (alphaPost + betaPost);
+    } else if (nParent === 0) {
+      // Se nenhum dado empírico foi acumulado na sessão, calcula o prior preditivo sobre a série fechada local
+      let histMatches = 0;
+      let histWins = 0;
+      const isLastOpen = candles[n - 1].closed === false;
+      const maxIdx = isLastOpen ? n - 2 : n - 1;
+      const startIdx = Math.max(3, maxIdx - 60);
+
+      for (let i = startIdx; i < maxIdx; i++) {
+        const cCur = candles[i];
+        const cPrev = candles[i - 1];
+        const cNext = candles[i + 1];
+        if (!cCur || !cPrev || !cNext || cNext.closed === false) continue;
+
+        const r1H = Math.log(cCur.close / Math.max(1e-6, cPrev.close));
+        const r1SignH = r1H > 0 ? "UP" : r1H < 0 ? "DOWN" : "FLAT";
+        const rngH = Math.max(1e-6, cCur.high - cCur.low);
+        const bodyDomH = Math.abs(cCur.close - cCur.open) / rngH > 0.60;
+
+        if (r1SignH === r1Sign && bodyDomH === bodyDominant) {
+          const age = maxIdx - i;
+          const w = Math.pow(this.forgettingLambda, age);
+          histMatches += w;
+          if (cNext.close > cNext.open) histWins += w;
+        }
+      }
+
+      if (histMatches > 0) {
+        alphaPost = histWins + m * pRoot;
+        betaPost = (histMatches - histWins) + m * (1 - pRoot);
+        pSpecific = alphaPost / (alphaPost + betaPost);
+        nSpecific = Math.round(histMatches);
+      } else {
+        const priorShift = (r1Sign === "UP" ? 0.035 : -0.035) + (pressureSign === "POS" ? 0.035 : -0.035);
+        pSpecific = clamp(0.50 + priorShift, 0.42, 0.58);
+      }
     }
 
-    // Se a contagem em memória ainda estiver vazia (início de sessão),
-    // aplica inferência bayesiana informativa baseada nas características contínuas:
-    if (nParent === 0 && nSpecific === 0) {
-      const priorShift = (r1Sign === "UP" ? 0.04 : -0.04) + (pressureSign === "POS" ? 0.04 : -0.04);
-      pSpecific = clamp(0.50 + priorShift, 0.42, 0.58);
-    }
+    // 3. Variância e Desvio Padrão Analítico da Distribuição Beta(alphaPost, betaPost)
+    const totalMass = alphaPost + betaPost;
+    const posteriorVar = (alphaPost * betaPost) / (totalMass * totalMass * (totalMass + 1));
+    const posteriorStd = Math.sqrt(Math.max(1e-6, posteriorVar));
 
     pSpecific = clamp(pSpecific, 0.25, 0.75);
     const probUp = Number(pSpecific.toFixed(4));
     const probDown = Number((1.0 - probUp).toFixed(4));
-    const confidence = clamp(0.40 + Math.min(0.50, (nSpecific + nParent * 0.2) / 60), 0.40, 0.95);
+    const confidence = clamp(0.40 + Math.min(0.52, (nSpecific + nParent * 0.25) / 55), 0.40, 0.95);
 
     return {
       engineId: this.id,
       name: this.name,
       probUp,
       probDown,
+      posteriorStd: Number(posteriorStd.toFixed(4)),
       confidence: Number(confidence.toFixed(3)),
       sampleSize: nSpecific,
       parentSampleSize: nParent,

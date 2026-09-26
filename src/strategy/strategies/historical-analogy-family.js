@@ -93,10 +93,10 @@ export class HistoricalAnalogyFamily {
     }
 
     // =========================================================================
-    // 5A — EXACT LOCAL ANALOGY (KNN k=12, Distância Estrita)
+    // 5A — EXACT LOCAL ANALOGY (KNN k=12, Distância Estrita + Wasserstein/DTW)
     // =========================================================================
     {
-      const res = this.exactKnn.evaluate({ currentVector: vec, candles });
+      const res = this.exactKnn.evaluate({ currentVector: vec, candles, microMetrics });
       if (res.effectiveN >= 8.0 && res.meanDistance < 1.0) {
         let dir = null;
         let pVal = 0.50;
@@ -129,9 +129,9 @@ export class HistoricalAnalogyFamily {
               edge,
               maturity: "ACTIVE",
               regimeCompatibility: regimeComp,
-              evidence: { effectiveN: res.effectiveN, meanDistance: res.meanDistance },
+              evidence: { effectiveN: res.effectiveN, meanDistance: res.meanDistance, w1: res.wassersteinDistance, dtw: res.dtwDistance },
               reasons: [
-                `Analogia estrita (vizinhos com alta proximidade)`,
+                `Analogia estrita Wasserstein+DTW (W1=${res.wassersteinDistance?.toFixed(3) ?? "0.000"})`,
                 `Consistência direcional robusta de ${(pVal * 100).toFixed(0)}% com distância média baixa (${res.meanDistance.toFixed(2)})`,
               ],
               timestamp: c0.timestamp,
@@ -146,7 +146,7 @@ export class HistoricalAnalogyFamily {
     // 5B — BROAD ANALOGY (KNN k=25, Cobertura Estatística Ponderada)
     // =========================================================================
     {
-      const res = this.broadKnn.evaluate({ currentVector: vec, candles });
+      const res = this.broadKnn.evaluate({ currentVector: vec, candles, microMetrics });
       if (res.effectiveN >= 15 && res.meanDistance < 2.0) {
         let dir = null;
         let pVal = 0.50;
@@ -179,7 +179,7 @@ export class HistoricalAnalogyFamily {
               edge,
               maturity: "ACTIVE",
               regimeCompatibility: regimeComp,
-              evidence: { effectiveN: res.effectiveN, prob: pVal },
+              evidence: { effectiveN: res.effectiveN, prob: pVal, w1: res.wassersteinDistance, dtw: res.dtwDistance },
               reasons: [
                 `Vizinhança histórica ampla (amostra robusta N=${res.effectiveN})`,
                 `Distribuição ponderada favorável (${(pVal * 100).toFixed(0)}%)`,
@@ -196,7 +196,7 @@ export class HistoricalAnalogyFamily {
     // 5C — RECENT ANALOGY (Kernel Dual com Recência Temporal Elevada)
     // =========================================================================
     {
-      const res = this.recentKnn.evaluate({ currentVector: vec, candles });
+      const res = this.recentKnn.evaluate({ currentVector: vec, candles, microMetrics });
       if (res.effectiveN >= 8.0 && res.meanDistance < 1.4) {
         let dir = null;
         let pVal = 0.50;
