@@ -661,6 +661,7 @@ function showOpenB2Notice() {
 }
 
 let panelSelectedSymbol = null;
+let lastAnalyzerSelectedSymbol = null;
 
 function renderMultiAssetBar(state, allSymbols = [], currentSelected) {
   const barEl = document.getElementById("multi-asset-bar");
@@ -831,12 +832,26 @@ function renderState(state = null, signals = [], logs = []) {
       }
     }
 
+    const analyzerSelected = state.selectedSymbol || state.symbol || allSymbols[0] || null;
+    const analyzerSelectionChanged = Boolean(
+      analyzerSelected && analyzerSelected !== lastAnalyzerSelectedSymbol
+    );
+    if (analyzerSelected) {
+      lastAnalyzerSelectedSymbol = analyzerSelected;
+    }
+
     if (activeSignalSymbol) {
       panelSelectedSymbol = activeSignalSymbol;
-    } else if (panelSelectedSymbol && state.symbols?.[panelSelectedSymbol]) {
-      // Mantém o símbolo escolhido pelo usuário se ainda for válido
+    } else if (analyzerSelectionChanged && (!state.symbols || state.symbols[analyzerSelected])) {
+      panelSelectedSymbol = analyzerSelected;
+    } else if (
+      panelSelectedSymbol &&
+      state.symbols?.[panelSelectedSymbol] &&
+      allSymbols.includes(panelSelectedSymbol)
+    ) {
+      // Mantém o símbolo escolhido pelo usuário enquanto o gráfico permanecer aberto
     } else {
-      panelSelectedSymbol = state.selectedSymbol || state.symbol || allSymbols[0] || null;
+      panelSelectedSymbol = analyzerSelected;
     }
 
     // Dados a serem exibidos no painel principal

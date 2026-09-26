@@ -179,13 +179,18 @@
   let lastWsMessageTime = 0;
   let lastParsedTick = null;
   const capturedChannels = new Map();
+  const unsubscribedChannels = new Set();
 
-  function dispatchChannelEvent(act, pair, tf = 60) {
+  function dispatchChannelEvent(act, pair, tf = 60, source = "ws_send") {
     if (!pair) return;
     if (act === "subscribe") {
-      capturedChannels.set(pair, { tf, at: Date.now() });
+      if (source !== "ws_tick") {
+        unsubscribedChannels.delete(pair);
+      }
+      capturedChannels.set(pair, { tf, at: Date.now(), source });
     } else {
       capturedChannels.delete(pair);
+      unsubscribedChannels.add(pair);
     }
     const chMsg = {
       type: "ORACLE_CHANNEL",
@@ -193,6 +198,7 @@
       action: act,
       pair,
       tf,
+      source,
       at: Date.now(),
     };
     window.postMessage(chMsg, "*");
@@ -201,21 +207,81 @@
     }
   }
 
-  // Detecção passiva do par via query param da URL do frame (ex: ?pair=ARBITRIUM_otc)
+  // Detecção passiva do par via DOM do frame ou query param da URL (?pair=ARBITRIUM_otc)
   let currentFramePair = null;
-  try {
-    if (typeof window !== "undefined" && window.location?.search) {
-      const searchParams = new URLSearchParams(window.location.search);
-      const urlPair = searchParams.get("pair") || searchParams.get("symbol") || searchParams.get("asset");
-      if (urlPair) {
-        const clean = extractCleanSymbol(urlPair);
-        if (clean) {
-          currentFramePair = clean;
-          dispatchChannelEvent("subscribe", clean, 60);
+
+  function detectPairInCurrentFrame() {
+    try {
+      if (typeof document !== "undefined") {
+        const legendSelectors = [
+          '[data-name="legend-source-title"]',
+          '.pane-legend-title__description',
+          '.pane-legend-title__container',
+          '.chart-data-window-body',
+          'div[class*="pane-legend-title"]',
+          'div[class*="legendTitle"]',
+        ];
+        for (const sel of legendSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.textContent) {
+            const raw = el.textContent.replace(/[+\-]?\b\d+\s*%/g, " ").trim();
+            const hasOtc = /\bOTC\b/i.test(raw) || /_OTC\b/i.test(raw);
+            const cleaned = raw.replace(/\bOTC\b/gi, "").replace(/[\/]/g, "").trim();
+            const match = /^([A-Z0-9_]{3,})/i.exec(cleaned);
+            if (match && match[1]) {
+              const base = match[1].toUpperCase();
+              const cand = hasOtc && !base.endsWith("_OTC") ? `${base}_OTC` : base;
+              const clean = extractCleanSymbol(cand);
+              if (clean) return clean;
+            }
+          }
         }
       }
+      if (typeof window !== "undefined" && window.location?.search) {
+        const searchParams = new URLSearchParams(window.location.search);
+        const urlPair = searchParams.get("pair") || searchParams.get("symbol") || searchParams.get("asset");
+        if (urlPair) {
+          const clean = extractCleanSymbol(urlPair);
+          if (clean) return clean;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function syncFramePair() {
+    try {
+      const isChildFrame = typeof window !== "undefined" && window.top && window.top !== window;
+      const detected = detectPairInCurrentFrame();
+      if (detected && detected !== currentFramePair) {
+        if (currentFramePair) {
+          dispatchChannelEvent("unsubscribe", currentFramePair, 60, "frame_dom");
+        }
+        currentFramePair = detected;
+        dispatchChannelEvent("subscribe", detected, 60, "frame_dom");
+      } else if (!detected && currentFramePair && isChildFrame && typeof document !== "undefined" && document.hidden) {
+        const old = currentFramePair;
+        currentFramePair = null;
+        dispatchChannelEvent("unsubscribe", old, 60, "frame_dom");
+      }
+    } catch (_) {}
+  }
+
+  syncFramePair();
+  if (typeof setInterval !== "undefined" && typeof window !== "undefined" && window.top && window.top !== window) {
+    setInterval(syncFramePair, 1000);
+    if (typeof window.addEventListener === "function") {
+      const onFrameUnload = () => {
+        if (currentFramePair) {
+          const old = currentFramePair;
+          currentFramePair = null;
+          dispatchChannelEvent("unsubscribe", old, 60, "frame_unload");
+        }
+      };
+      window.addEventListener("pagehide", onFrameUnload);
+      window.addEventListener("beforeunload", onFrameUnload);
     }
-  } catch (_) {}
+  }
 
   // --- OBSERVADOR PASSIVO DE WEBSOCKET ---
   if (typeof window.WebSocket === "function") {
@@ -264,7 +330,7 @@
                   const parsedCh = parseChannelString(parsed.channel || parsed.topic || "");
                   const tf = parsedCh?.tf || 60;
                   const act = isUnsub ? "unsubscribe" : "subscribe";
-                  dispatchChannelEvent(act, pair, tf);
+                  dispatchChannelEvent(act, pair, tf, "ws_send");
                 }
               }
             }
@@ -357,8 +423,8 @@
 
           if (fC !== null) {
             lastParsedTick = { pair: fPair, price: Number(fC), time: fTs };
-            if (fPair && !capturedChannels.has(fPair)) {
-              dispatchChannelEvent("subscribe", fPair, fTf ? Number(fTf) : 60);
+            if (fPair && !capturedChannels.has(fPair) && !unsubscribedChannels.has(fPair)) {
+              dispatchChannelEvent("subscribe", fPair, fTf ? Number(fTf) : 60, "ws_tick");
             }
           }
 

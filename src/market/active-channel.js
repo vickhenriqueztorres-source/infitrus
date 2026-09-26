@@ -15,11 +15,12 @@
 
 export class ActiveChannel {
   constructor() {
-    this._subscriptions = new Map(); // key `${pair}:${tf}` -> { pair, tf, at }
+    this._subscriptions = new Map(); // key `${pair}:${tf}` -> { pair, tf, at, seq }
     this._lastHistory = null; // { pair, tf, at }
     this._listeners = new Set();
     this._unsubListeners = new Set();
     this._current = null; // { pair, tf } | null
+    this._seq = 0;
   }
 
   /**
@@ -37,9 +38,17 @@ export class ActiveChannel {
     const key = `${normalizedPair}:${normalizedTf}`;
 
     if (action === "subscribe") {
-      this._subscriptions.set(key, { pair: normalizedPair, tf: normalizedTf, at });
+      this._subscriptions.set(key, { pair: normalizedPair, tf: normalizedTf, at, seq: ++this._seq });
     } else if (action === "unsubscribe") {
       this._subscriptions.delete(key);
+      for (const [k, sub] of this._subscriptions.entries()) {
+        if (sub.pair === normalizedPair) {
+          this._subscriptions.delete(k);
+        }
+      }
+      if (this._lastHistory && this._lastHistory.pair === normalizedPair) {
+        this._lastHistory = null;
+      }
       for (const fn of this._unsubListeners) {
         try { fn(normalizedPair, normalizedTf); } catch (_) {}
       }
@@ -126,7 +135,7 @@ export class ActiveChannel {
           if (a.pair === this._lastHistory.pair && a.tf === this._lastHistory.tf) return -1;
           if (b.pair === this._lastHistory.pair && b.tf === this._lastHistory.tf) return 1;
         }
-        return 0;
+        return (b.seq || 0) - (a.seq || 0);
       });
       next = { pair: subs[0].pair, tf: subs[0].tf };
     } else if (this._lastHistory) {

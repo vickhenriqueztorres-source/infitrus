@@ -159,6 +159,7 @@ export function initBridgeListener(options = {}) {
         action: data.action,
         pair: data.pair,
         tf: data.tf,
+        source: data.source || null,
         at: data.at,
       });
     } else if (data.type === "ORACLE_ACCESSORY_STATUS" && typeof options.onAccessoryStatus === "function") {
