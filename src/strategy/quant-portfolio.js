@@ -164,9 +164,12 @@ export class QuantPortfolio {
     });
 
     const oppMicrostructure = this.familyMicrostructure.evaluate({
+      candles,
+      featureMap,
       microMetrics,
       payout: this.payout,
       regime: currentRegime,
+      timestamp: lastCandle ? lastCandle.timestamp : Date.now(),
     });
 
     const oppVolatility = this.familyVolatility.evaluate({

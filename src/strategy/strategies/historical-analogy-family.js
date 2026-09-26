@@ -1,16 +1,16 @@
 /**
- * historical-analogy-family.js - Família 5: Analogia Histórica (4 Subestratégias Autônomas)
- * Oracle Quant Signals
+ * historical-analogy-family.js - Família 5: Analogia Histórica (4 Subestratégias Autônomas com Wasserstein-DTW e Wilson)
+ * Oracle Quant Signals — Active Quant Optimizer
  *
  * Subestratégias:
- * 5A. Exact Local Analogy: KNN estrito (k=5) com alta exigência de proximidade multidimensional.
- * 5B. Broad Analogy: Vizinhança expandida (k=25) com ponderação gaussiana para cobertura amostral.
- * 5C. Recent Analogy: Kernel dual com forte decaimento temporal (λ) privilegiando o regime recente.
- * 5D. Bayesian Context Analogy: Inferência Bayesiana hierárquica por regime e microestrutura (partial pooling).
+ * 5A. Exact Local Analogy: KNN estrito (k=12) com distância elástica Wasserstein-1 + DTW e limite de Wilson sobre N_efetivo.
+ * 5B. Broad Analogy: Vizinhança expandida (k=25) com ponderação gaussiana e cobertura estatística robusta.
+ * 5C. Recent Analogy: Kernel dual com forte decaimento temporal (λ=0.035) privilegiando o regime atual.
+ * 5D. Bayesian Context Analogy: Inferência Beta-Binomial hierárquica com limiar rigoroso (>= 62% e amostra mínima real).
  */
 
 import { clamp } from "../detectors/detector-types.js";
-import { CorrelationGroups } from "../pool/opportunity-pool.js";
+import { CorrelationGroups, computeWilsonLowerBound } from "../pool/opportunity-pool.js";
 import { AdaptiveKnnEngine } from "../engines/adaptive-knn-engine.js";
 import { HierarchicalBayesEngine } from "../engines/hierarchical-bayes-engine.js";
 
@@ -41,7 +41,7 @@ export class HistoricalAnalogyFamily {
     this.recentKnn = new AdaptiveKnnEngine({
       kNeighbors: 15,
       tauDistance: 2.2,
-      lambdaAge: 0.035, // Forte decaimento temporal
+      lambdaAge: 0.035,
       maxHistory: 150,
       shrinkageM: 20.0,
     });
@@ -51,16 +51,6 @@ export class HistoricalAnalogyFamily {
 
   /**
    * Avalia os dados e gera candidatos independentes das 4 subestratégias de Analogia Histórica.
-   *
-   * @param {Object} params
-   * @param {Array<Object>} params.candles
-   * @param {number[]} [params.currentVector=[]]
-   * @param {Object} [params.featureMap={}]
-   * @param {Object} [params.microMetrics=null]
-   * @param {string} [params.volatilityState="normal"]
-   * @param {number} [params.payout=0.80]
-   * @param {string} [params.regime="trend"]
-   * @returns {Array<Object>} Lista de OpportunityObjects qualificados
    */
   evaluate({
     candles = [],
@@ -80,7 +70,6 @@ export class HistoricalAnalogyFamily {
 
     const regimeComp = 1.0;
 
-    // Se o vetor atual não foi fornecido pronto, monta um vetor numérico padrão
     let vec = currentVector;
     if (!vec || vec.length === 0) {
       const c1 = candles[n - 2];
@@ -100,18 +89,19 @@ export class HistoricalAnalogyFamily {
       if (res.effectiveN >= 8.0 && res.meanDistance < 1.0) {
         let dir = null;
         let pVal = 0.50;
-        if (res.probUp >= 0.70) {
+        if (res.probUp >= 0.69) {
           dir = "CALL";
           pVal = res.probUp;
-        } else if (res.probDown >= 0.70) {
+        } else if (res.probDown >= 0.69) {
           dir = "PUT";
           pVal = res.probDown;
         }
 
         if (dir) {
           const rawProb = Number(pVal.toFixed(4));
-          const uncert = Number(clamp(0.045 - (res.confidence - 0.3) * 0.03, 0.02, 0.05).toFixed(4));
-          const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+          const uncert = Number(clamp(0.044 - (res.confidence - 0.3) * 0.028, 0.022, 0.05).toFixed(4));
+          const effSample = clamp(32 + res.effectiveN * 3.2, 42, 110);
+          const consProb = Number(computeWilsonLowerBound(rawProb, effSample, 0.6745).toFixed(4));
           const edge = Number((consProb - breakeven).toFixed(4));
 
           if (consProb > breakeven && edge >= 0.025) {
@@ -124,15 +114,20 @@ export class HistoricalAnalogyFamily {
               calibratedProbability: rawProb,
               conservativeProbability: consProb,
               uncertainty: uncert,
-              quality: Number(clamp(res.confidence * 0.9, 0.50, 0.95).toFixed(3)),
+              quality: Number(clamp(res.confidence * 0.92, 0.50, 0.95).toFixed(3)),
               breakevenProbability: Number(breakeven.toFixed(4)),
               edge,
               maturity: "ACTIVE",
               regimeCompatibility: regimeComp,
-              evidence: { effectiveN: res.effectiveN, meanDistance: res.meanDistance, w1: res.wassersteinDistance, dtw: res.dtwDistance },
+              evidence: {
+                effectiveN: res.effectiveN,
+                meanDistance: res.meanDistance,
+                w1: res.wassersteinDistance,
+                dtw: res.dtwDistance,
+              },
               reasons: [
                 `Analogia estrita Wasserstein+DTW (W1=${res.wassersteinDistance?.toFixed(3) ?? "0.000"})`,
-                `Consistência direcional robusta de ${(pVal * 100).toFixed(0)}% com distância média baixa (${res.meanDistance.toFixed(2)})`,
+                `Consistência direcional robusta de ${(pVal * 100).toFixed(0)}% com distância baixa (${res.meanDistance.toFixed(2)})`,
               ],
               timestamp: c0.timestamp,
               fingerprint: `EXACT_KNN_${dir}_${c0.timestamp}`,
@@ -147,21 +142,22 @@ export class HistoricalAnalogyFamily {
     // =========================================================================
     {
       const res = this.broadKnn.evaluate({ currentVector: vec, candles, microMetrics });
-      if (res.effectiveN >= 15 && res.meanDistance < 2.0) {
+      if (res.effectiveN >= 15 && res.meanDistance < 1.9) {
         let dir = null;
         let pVal = 0.50;
-        if (res.probUp >= 0.68) {
+        if (res.probUp >= 0.67) {
           dir = "CALL";
           pVal = res.probUp;
-        } else if (res.probDown >= 0.68) {
+        } else if (res.probDown >= 0.67) {
           dir = "PUT";
           pVal = res.probDown;
         }
 
         if (dir) {
           const rawProb = Number(pVal.toFixed(4));
-          const uncert = Number(clamp(0.038 - (res.confidence - 0.3) * 0.02, 0.02, 0.045).toFixed(4));
-          const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+          const uncert = Number(clamp(0.039 - (res.confidence - 0.3) * 0.02, 0.022, 0.045).toFixed(4));
+          const effSample = clamp(36 + res.effectiveN * 2.8, 48, 120);
+          const consProb = Number(computeWilsonLowerBound(rawProb, effSample, 0.6745).toFixed(4));
           const edge = Number((consProb - breakeven).toFixed(4));
 
           if (consProb > breakeven && edge >= 0.025) {
@@ -179,9 +175,14 @@ export class HistoricalAnalogyFamily {
               edge,
               maturity: "ACTIVE",
               regimeCompatibility: regimeComp,
-              evidence: { effectiveN: res.effectiveN, prob: pVal, w1: res.wassersteinDistance, dtw: res.dtwDistance },
+              evidence: {
+                effectiveN: res.effectiveN,
+                prob: pVal,
+                w1: res.wassersteinDistance,
+                dtw: res.dtwDistance,
+              },
               reasons: [
-                `Vizinhança histórica ampla (amostra robusta N=${res.effectiveN})`,
+                `Vizinhança histórica ampla (amostra efetiva N=${res.effectiveN})`,
                 `Distribuição ponderada favorável (${(pVal * 100).toFixed(0)}%)`,
               ],
               timestamp: c0.timestamp,
@@ -197,7 +198,7 @@ export class HistoricalAnalogyFamily {
     // =========================================================================
     {
       const res = this.recentKnn.evaluate({ currentVector: vec, candles, microMetrics });
-      if (res.effectiveN >= 8.0 && res.meanDistance < 1.4) {
+      if (res.effectiveN >= 8.0 && res.meanDistance < 1.35) {
         let dir = null;
         let pVal = 0.50;
         if (res.probUp >= 0.68) {
@@ -210,8 +211,9 @@ export class HistoricalAnalogyFamily {
 
         if (dir) {
           const rawProb = Number(pVal.toFixed(4));
-          const uncert = Number(clamp(0.042 - (res.confidence - 0.3) * 0.025, 0.02, 0.05).toFixed(4));
-          const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+          const uncert = Number(clamp(0.042 - (res.confidence - 0.3) * 0.025, 0.022, 0.05).toFixed(4));
+          const effSample = clamp(32 + res.effectiveN * 3.0, 42, 105);
+          const consProb = Number(computeWilsonLowerBound(rawProb, effSample, 0.6745).toFixed(4));
           const edge = Number((consProb - breakeven).toFixed(4));
 
           if (consProb > breakeven && edge >= 0.025) {
@@ -229,7 +231,7 @@ export class HistoricalAnalogyFamily {
               edge,
               maturity: "LEARNING",
               regimeCompatibility: regimeComp,
-              evidence: { effectiveN: res.effectiveN, recencyDecay: 0.04 },
+              evidence: { effectiveN: res.effectiveN, recencyDecay: 0.035 },
               reasons: [
                 `Analogia de regime recente (decaimento temporal acelerado)`,
                 `Dinâmica de curto prazo compatível (${(pVal * 100).toFixed(0)}%)`,
@@ -243,7 +245,7 @@ export class HistoricalAnalogyFamily {
     }
 
     // =========================================================================
-    // 5D — BAYESIAN CONTEXT ANALOGY (Partial Pooling por Regime & Microestrutura)
+    // 5D — BAYESIAN CONTEXT ANALOGY (Partial Pooling Estrito >= 62% e Amostra Real)
     // =========================================================================
     {
       const res = this.bayes.evaluate({
@@ -257,23 +259,27 @@ export class HistoricalAnalogyFamily {
         candles,
       });
 
+      const hasSufficientHistory = (res.sampleSize || 0) >= 10 || (res.parentSampleSize || 0) >= 18;
       let dir = null;
       let pVal = 0.50;
-      if (res.probUp >= 0.56) {
+
+      // Elevado de 0.56 para 0.62 para eliminar sinais fracos que geravam falsa confluência
+      if (hasSufficientHistory && res.probUp >= 0.62) {
         dir = "CALL";
         pVal = res.probUp;
-      } else if (res.probDown >= 0.56) {
+      } else if (hasSufficientHistory && res.probDown >= 0.62) {
         dir = "PUT";
         pVal = res.probDown;
       }
 
       if (dir) {
         const rawProb = Number(pVal.toFixed(4));
-        const uncert = Number(clamp(0.04 - (res.confidence - 0.4) * 0.02, 0.02, 0.05).toFixed(4));
-        const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+        const uncert = Number(clamp(0.041 - (res.confidence - 0.4) * 0.02, 0.022, 0.05).toFixed(4));
+        const effSample = clamp(34 + (res.sampleSize || 0) * 1.8 + (res.parentSampleSize || 0) * 0.5, 42, 108);
+        const consProb = Number(computeWilsonLowerBound(rawProb, effSample, 0.6745).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.022) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "BAYESIAN_CONTEXT_ANALOGY",
@@ -283,15 +289,19 @@ export class HistoricalAnalogyFamily {
             calibratedProbability: rawProb,
             conservativeProbability: consProb,
             uncertainty: uncert,
-            quality: Number(clamp(res.confidence, 0.50, 0.95).toFixed(3)),
+            quality: Number(clamp(res.confidence, 0.54, 0.95).toFixed(3)),
             breakevenProbability: Number(breakeven.toFixed(4)),
             edge,
-            maturity: res.sampleSize > 15 ? "ACTIVE" : "LEARNING",
+            maturity: res.sampleSize >= 18 ? "ACTIVE" : "LEARNING",
             regimeCompatibility: regimeComp,
-            evidence: { sampleSize: res.sampleSize, parentSize: res.parentSampleSize },
+            evidence: {
+              sampleSize: res.sampleSize,
+              parentSize: res.parentSampleSize,
+              effectiveN: Math.round((res.sampleSize || 0) + (res.parentSampleSize || 0) * 0.35),
+            },
             reasons: [
-              `Inferência Bayesiana hierárquica por contexto de regime`,
-              `Distribuição posterior contraída (${(pVal * 100).toFixed(0)}%)`,
+              `Inferência Bayesiana hierárquica por regime (${(pVal * 100).toFixed(0)}%)`,
+              `Amostra contextual validada (N=${res.sampleSize || 0}, pai=${res.parentSampleSize || 0})`,
             ],
             timestamp: c0.timestamp,
             fingerprint: `BAYES_CTX_${dir}_${c0.timestamp}`,

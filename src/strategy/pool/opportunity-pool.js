@@ -195,10 +195,11 @@ export class OpportunityPool {
       const calibratedProbability = Number(clamp(fusedProb, 0.40, 0.76).toFixed(4));
 
       // 2. Variância Posterior Analítica + Cota Inferior de Wilson
-      // Reduz a incerteza conforme a precisão estrutural (1 / uncertainty^2) e a massa Beta crescem
-      const structUncert = clamp(opp.uncertainty || 0.035, 0.018, 0.060);
-      const structEffectiveN = clamp(0.24 / (structUncert * structUncert), 60, 480);
-      const totalEffectiveN = structEffectiveN + Math.max(0, posteriorMass - this.priorStrengthM);
+      // Evita inflar artificialmente N_eff (máx 115 para setup estrutural puro) e incorpora effectiveN empírico quando disponível
+      const structUncert = clamp(opp.uncertainty || 0.035, 0.020, 0.060);
+      const baseStructN = clamp(0.065 / (structUncert * structUncert), 38, 115);
+      const empiricalSignalN = Number.isFinite(opp.evidence?.effectiveN) ? clamp(opp.evidence.effectiveN * 2.5, 0, 60) : 0;
+      const totalEffectiveN = baseStructN + empiricalSignalN + Math.max(0, posteriorMass - this.priorStrengthM);
 
       const wilsonConservative = computeWilsonLowerBound(calibratedProbability, totalEffectiveN, 0.6745);
       const conservativeProbability = Number(clamp(wilsonConservative, 0.40, 0.75).toFixed(4));

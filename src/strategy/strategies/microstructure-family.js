@@ -1,74 +1,152 @@
 /**
- * microstructure-family.js - Família 3: Microestrutura / Fluxo de Ticks (5 Subestratégias Autônomas)
- * Oracle Quant Signals
+ * microstructure-family.js - Família 3: Microestrutura / Fluxo de Ticks (5 Subestratégias Autônomas com Ancoragem Gráfica)
+ * Oracle Quant Signals — Active Quant Optimizer
  *
  * Subestratégias:
- * 3A. Persistent Tick Pressure: Pressão direcional acumulada estável.
- * 3B. Pressure Acceleration: Derivada de 1ª e 2ª ordem da pressão intraminuto.
- * 3C. Pressure Reversal: Inversão súbita da agressão antes da virada do minuto.
- * 3D. High/Low Acceptance: Tempo e absorção nos extremos da vela em score contínuo.
- * 3E. End-of-Minute Flow: Especializada exclusivamente no fluxo dos últimos 15s/10s/5s.
+ * 3A. Persistent Tick Pressure: Pressão de fluxo não-linear integrada (F(t)) sustentada sem rejeição de pavio oposto.
+ * 3B. Pressure Acceleration: Convergência entre derivada de velocidade/aceleração do preço e aceleração da pressão.
+ * 3C. Pressure Reversal: Divergência cinemática (freio v > 0, a << 0) e inversão súbita de agressão em zona esticada.
+ * 3D. High/Low Acceptance: Densidade de ocupação temporal de Wasserstein concentrada nos quantis extremos sem absorção contrária.
+ * 3E. End-of-Minute Flow: Explosão direcional limpa nos últimos 15s/10s alinhada ao fechamento da vela.
  */
 
 import { clamp } from "../detectors/detector-types.js";
-import { CorrelationGroups } from "../pool/opportunity-pool.js";
+import { CorrelationGroups, computeWilsonLowerBound } from "../pool/opportunity-pool.js";
+
+function extractCandleGuard(candles, featureMap) {
+  if (!Array.isArray(candles) || candles.length < 5) {
+    return {
+      hasCandles: false,
+      allowBullContinuation: true,
+      allowBearContinuation: true,
+      allowBearReversal: true,
+      allowBullReversal: true,
+      closePos: 0.5,
+      upperWick: 0.1,
+      lowerWick: 0.1,
+      zScore: 0,
+      rangeToAtr: 1.0,
+    };
+  }
+
+  const n = candles.length;
+  const c0 = candles[n - 1];
+  const range0 = Math.max(1e-6, c0.high - c0.low);
+
+  const atrPeriod = Math.min(14, n - 1);
+  let trSum = 0;
+  for (let i = n - atrPeriod; i < n; i++) {
+    const cur = candles[i];
+    const prevClose = candles[i - 1].close;
+    trSum += Math.max(cur.high - cur.low, Math.abs(cur.high - prevClose), Math.abs(cur.low - prevClose));
+  }
+  const atr14 = Math.max(1e-6, trSum / Math.max(1, atrPeriod));
+  const rangeToAtr = range0 / atr14;
+
+  const closePos = featureMap.closePosition !== undefined ? featureMap.closePosition : (c0.close - c0.low) / range0;
+  const upperWick = featureMap.upperWickRatio !== undefined ? featureMap.upperWickRatio : (c0.high - Math.max(c0.open, c0.close)) / range0;
+  const lowerWick = featureMap.lowerWickRatio !== undefined ? featureMap.lowerWickRatio : (Math.min(c0.open, c0.close) - c0.low) / range0;
+  const zScore = featureMap.zScore20 !== undefined ? featureMap.zScore20 : 0;
+
+  // Bloqueia sinais de continuação de fluxo em micro-dojis (< 0.45 ATR), contra pavio de rejeição (> 35%) ou em exaustão severa (|Z| >= 1.90)
+  const allowBullContinuation =
+    rangeToAtr >= 0.45 && c0.close > c0.open && upperWick <= 0.34 && closePos >= 0.55 && zScore < 1.90;
+  const allowBearContinuation =
+    rangeToAtr >= 0.45 && c0.close < c0.open && lowerWick <= 0.34 && closePos <= 0.45 && zScore > -1.90;
+
+  // Reversão de fluxo exige pavio de absorção ou extremo de Z-Score
+  const allowBearReversal = rangeToAtr >= 0.65 && (upperWick >= 0.28 || zScore >= 1.25 || closePos <= 0.50);
+  const allowBullReversal = rangeToAtr >= 0.65 && (lowerWick >= 0.28 || zScore <= -1.25 || closePos >= 0.50);
+
+  return {
+    hasCandles: true,
+    allowBullContinuation,
+    allowBearContinuation,
+    allowBearReversal,
+    allowBullReversal,
+    closePos,
+    upperWick,
+    lowerWick,
+    zScore,
+    rangeToAtr,
+  };
+}
 
 export class MicrostructureFamily {
   constructor(config = {}) {
     this.familyId = "MICROSTRUCTURE";
     this.familyName = "Microestrutura / Fluxo";
     this.correlationGroup = CorrelationGroups.MICROSTRUCTURE;
-    this.minTicks = config.minTicks || 6;
+    this.minTicks = config.minTicks || 8;
   }
 
   /**
-   * Avalia exclusivamente as métricas intraminuto e gera candidatos das 5 subestratégias.
-   *
-   * @param {Object} params
-   * @param {Object} [params.microMetrics=null]
-   * @param {number} [params.payout=0.80]
-   * @param {number} [params.timestamp=Date.now()]
-   * @returns {Array<Object>} Lista de OpportunityObjects qualificados
+   * Avalia as métricas intraminuto ancoradas na estrutura gráfica da vela e gera candidatos das 5 subestratégias.
    */
-  evaluate({ microMetrics = null, payout = 0.80, timestamp = Date.now() }) {
+  evaluate({ candles = [], featureMap = {}, microMetrics = null, payout = 0.80, timestamp = Date.now() }) {
     const tickCount = microMetrics?.tickCount || 0;
     if (!microMetrics || tickCount < this.minTicks) return [];
 
     const breakeven = 1 / (1 + payout);
     const opportunities = [];
+    const guard = extractCandleGuard(candles, featureMap);
 
     const {
       pressure = 0,
+      integratedFlowPressure = pressure,
       pressureVelocity = 0,
       pressureAcceleration = 0,
+      priceVelocity = 0,
+      priceAcceleration = 0,
+      kinematicRejection = 0,
+      kinematicConvergence = 0,
       timeNearHighRatio = 0,
       timeNearLowRatio = 0,
       lastTicksDirection = 0,
       flowImbalance = 0,
-      last10TickDirection = 0,
+      durationDensity = null,
     } = microMetrics;
 
-    const sampleConfidence = clamp(0.50 + Math.min(0.45, tickCount / 35), 0.50, 0.95);
+    const sampleConfidence = clamp(0.52 + Math.min(0.43, tickCount / 40), 0.52, 0.95);
 
     // =========================================================================
-    // 3A — PERSISTENT TICK PRESSURE (Pressão Sustentada de Fluxo)
+    // 3A — PERSISTENT TICK PRESSURE (Pressão Integrada Não-Linear Sustentada)
     // =========================================================================
     {
       let pDir = null;
       let pScore = 0;
 
-      if (pressure >= 0.55 && flowImbalance >= 0.35 && tickCount >= 20) {
+      if (
+        guard.allowBullContinuation &&
+        integratedFlowPressure >= 0.56 &&
+        flowImbalance >= 0.36 &&
+        tickCount >= 20 &&
+        kinematicRejection >= -0.15
+      ) {
         pDir = "CALL";
-        pScore = 0.35 + clamp(pressure * 0.70, 0.25, 0.50) + clamp(flowImbalance * 0.30, 0.10, 0.15);
-      } else if (pressure <= -0.55 && flowImbalance <= -0.35 && tickCount >= 20) {
+        pScore =
+          0.36 +
+          clamp(integratedFlowPressure * 0.65, 0.24, 0.46) +
+          clamp(flowImbalance * 0.32, 0.10, 0.18);
+      } else if (
+        guard.allowBearContinuation &&
+        integratedFlowPressure <= -0.56 &&
+        flowImbalance <= -0.36 &&
+        tickCount >= 20 &&
+        kinematicRejection <= 0.15
+      ) {
         pDir = "PUT";
-        pScore = 0.35 + clamp(-pressure * 0.70, 0.25, 0.50) + clamp(-flowImbalance * 0.30, 0.10, 0.15);
+        pScore =
+          0.36 +
+          clamp(-integratedFlowPressure * 0.65, 0.24, 0.46) +
+          clamp(-flowImbalance * 0.32, 0.10, 0.18);
       }
 
       if (pDir && pScore >= 0.72) {
-        const rawProb = Number(clamp(0.50 + pScore * 0.20, 0.50, 0.71).toFixed(4));
-        const uncert = Number(clamp(0.04 - pScore * 0.012, 0.02, 0.05).toFixed(4));
-        const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+        const rawProb = Number(clamp(0.50 + pScore * 0.185, 0.50, 0.70).toFixed(4));
+        const uncert = Number(clamp(0.041 - pScore * 0.013, 0.022, 0.05).toFixed(4));
+        const structEffN = clamp(0.065 / (uncert * uncert), 42, 102);
+        const consProb = Number(computeWilsonLowerBound(rawProb, structEffN, 0.6745).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
         if (consProb > breakeven && edge >= 0.025) {
@@ -86,10 +164,10 @@ export class MicrostructureFamily {
             edge,
             maturity: "ACTIVE",
             regimeCompatibility: 1.0,
-            evidence: { pressure, flowImbalance, tickCount },
+            evidence: { integratedFlowPressure, flowImbalance, tickCount },
             reasons: [
-              `Pressão persistente de ticks (${(pressure * 100).toFixed(0)}%)`,
-              `Desequilíbrio de agressão favorável (${(flowImbalance * 100).toFixed(0)}%)`,
+              `Pressão não-linear persistente de ticks (${(integratedFlowPressure * 100).toFixed(0)}%)`,
+              `Desequilíbrio de agressão sustentado (${(flowImbalance * 100).toFixed(0)}%) sem rejeição`,
             ],
             timestamp,
             fingerprint: `TICKPRESS_${pDir}_${timestamp}`,
@@ -99,28 +177,42 @@ export class MicrostructureFamily {
     }
 
     // =========================================================================
-    // 3B — PRESSURE ACCELERATION (Derivada de 1ª e 2ª Ordem)
+    // 3B — PRESSURE ACCELERATION (Derivada de 1ª e 2ª Ordem + Convergência Cinemática)
     // =========================================================================
     {
       let accelDir = null;
       let accelScore = 0;
 
-      // Detecta fluxo crescendo de forma acelerada com força dinâmica expressiva
-      const dynamicForceBull = pressureVelocity * 1.6 + pressureAcceleration * 1.0;
-      const dynamicForceBear = -pressureVelocity * 1.6 - pressureAcceleration * 1.0;
+      const dynamicForceBull =
+        pressureVelocity * 1.45 + pressureAcceleration * 0.95 + Math.max(0, kinematicConvergence) * 0.25;
+      const dynamicForceBear =
+        -pressureVelocity * 1.45 - pressureAcceleration * 0.95 + Math.max(0, -kinematicConvergence) * 0.25;
 
-      if (dynamicForceBull >= 0.38 && tickCount >= 15) {
+      if (
+        guard.allowBullContinuation &&
+        dynamicForceBull >= 0.42 &&
+        tickCount >= 16 &&
+        priceAcceleration >= -0.02 &&
+        kinematicRejection >= -0.10
+      ) {
         accelDir = "CALL";
-        accelScore = 0.35 + clamp(dynamicForceBull * 1.4, 0.15, 0.55);
-      } else if (dynamicForceBear >= 0.38 && tickCount >= 15) {
+        accelScore = 0.36 + clamp(dynamicForceBull * 1.25, 0.18, 0.54);
+      } else if (
+        guard.allowBearContinuation &&
+        dynamicForceBear >= 0.42 &&
+        tickCount >= 16 &&
+        priceAcceleration <= 0.02 &&
+        kinematicRejection <= 0.10
+      ) {
         accelDir = "PUT";
-        accelScore = 0.35 + clamp(dynamicForceBear * 1.4, 0.15, 0.55);
+        accelScore = 0.36 + clamp(dynamicForceBear * 1.25, 0.18, 0.54);
       }
 
-      if (accelDir && accelScore >= 0.65) {
-        const rawProb = Number(clamp(0.50 + accelScore * 0.21, 0.50, 0.72).toFixed(4));
-        const uncert = Number(clamp(0.045 - accelScore * 0.015, 0.02, 0.05).toFixed(4));
-        const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+      if (accelDir && accelScore >= 0.68) {
+        const rawProb = Number(clamp(0.50 + accelScore * 0.19, 0.50, 0.705).toFixed(4));
+        const uncert = Number(clamp(0.043 - accelScore * 0.014, 0.022, 0.05).toFixed(4));
+        const structEffN = clamp(0.065 / (uncert * uncert), 40, 98);
+        const consProb = Number(computeWilsonLowerBound(rawProb, structEffN, 0.6745).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
         if (consProb > breakeven && edge >= 0.025) {
@@ -138,10 +230,10 @@ export class MicrostructureFamily {
             edge,
             maturity: "LEARNING",
             regimeCompatibility: 1.05,
-            evidence: { pressureVelocity, pressureAcceleration },
+            evidence: { pressureVelocity, pressureAcceleration, kinematicConvergence },
             reasons: [
-              `Aceleração da pressão de agressão (${(pressureAcceleration * 100).toFixed(0)}%)`,
-              `Curvatura favorável nos snapshots de ticks`,
+              `Aceleração diferencial da agressão (${(pressureAcceleration * 100).toFixed(0)}%)`,
+              `Convergência cinemática favorável nos últimos ticks`,
             ],
             timestamp,
             fingerprint: `PRESSACC_${accelDir}_${timestamp}`,
@@ -151,25 +243,42 @@ export class MicrostructureFamily {
     }
 
     // =========================================================================
-    // 3C — PRESSURE REVERSAL (Inversão Súbita da Agressão Intraminuto)
+    // 3C — PRESSURE REVERSAL (Freio Cinemático Terminal e Inversão Súbita de Agressão)
     // =========================================================================
     {
       let revDir = null;
       let revScore = 0;
 
-      // Inversão: velocidade de pressão fortemente contrária à pressão acumulada prévia
-      if (pressure > 0.25 && pressureVelocity < -0.30) {
+      // Inversão Baixista (PUT): pressão prévia compradora que sofre freio brusco (pressureVelocity << 0 ou kinematicRejection < 0)
+      if (
+        guard.allowBearReversal &&
+        pressure > 0.25 &&
+        (pressureVelocity < -0.32 || (pressureVelocity < -0.20 && kinematicRejection < -0.18)) &&
+        lastTicksDirection <= 0
+      ) {
         revDir = "PUT";
-        revScore = 0.35 + clamp(-pressureVelocity * 2.0, 0.20, 0.55);
-      } else if (pressure < -0.25 && pressureVelocity > 0.30) {
+        revScore =
+          0.36 +
+          clamp(-pressureVelocity * 1.6, 0.18, 0.44) +
+          clamp(Math.abs(Math.min(0, kinematicRejection)) * 0.25, 0, 0.18);
+      } else if (
+        guard.allowBullReversal &&
+        pressure < -0.25 &&
+        (pressureVelocity > 0.32 || (pressureVelocity > 0.20 && kinematicRejection > 0.18)) &&
+        lastTicksDirection >= 0
+      ) {
         revDir = "CALL";
-        revScore = 0.35 + clamp(pressureVelocity * 2.0, 0.20, 0.55);
+        revScore =
+          0.36 +
+          clamp(pressureVelocity * 1.6, 0.18, 0.44) +
+          clamp(Math.max(0, kinematicRejection) * 0.25, 0, 0.18);
       }
 
-      if (revDir && revScore >= 0.65) {
-        const rawProb = Number(clamp(0.50 + revScore * 0.20, 0.50, 0.70).toFixed(4));
-        const uncert = Number(clamp(0.045 - revScore * 0.015, 0.02, 0.05).toFixed(4));
-        const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+      if (revDir && revScore >= 0.66) {
+        const rawProb = Number(clamp(0.50 + revScore * 0.185, 0.50, 0.695).toFixed(4));
+        const uncert = Number(clamp(0.044 - revScore * 0.014, 0.023, 0.05).toFixed(4));
+        const structEffN = clamp(0.065 / (uncert * uncert), 40, 96);
+        const consProb = Number(computeWilsonLowerBound(rawProb, structEffN, 0.6745).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
         if (consProb > breakeven && edge >= 0.025) {
@@ -187,10 +296,10 @@ export class MicrostructureFamily {
             edge,
             maturity: "LEARNING",
             regimeCompatibility: 1.0,
-            evidence: { pressure, pressureVelocity },
+            evidence: { pressure, pressureVelocity, kinematicRejection },
             reasons: [
-              `Inversão rápida de fluxo (pressão virando para ${revDir})`,
-              `Divergência entre pressão prévia e agressão final`,
+              `Inversão de agressão e freio cinemático no terço final (${revDir})`,
+              `Absorção da pressão prévia pelos ticks terminais`,
             ],
             timestamp,
             fingerprint: `PRESSREV_${revDir}_${timestamp}`,
@@ -200,25 +309,47 @@ export class MicrostructureFamily {
     }
 
     // =========================================================================
-    // 3D — HIGH/LOW ACCEPTANCE (Permanência Contínua nos Extremos)
+    // 3D — HIGH/LOW ACCEPTANCE (Densidade de Ocupação Temporal nos Quantis Extremos)
     // =========================================================================
     {
       let accDir = null;
       let accScore = 0;
 
-      // Score contínuo baseado em tempo de permanência nos extremos
-      if (timeNearHighRatio >= 0.45 && timeNearHighRatio > timeNearLowRatio * 2.0) {
+      // Usa a densidade de ocupação de Wasserstein (durationDensity[3..4] vs [0..1]) quando disponível
+      const topOccupancy =
+        Array.isArray(durationDensity) && durationDensity.length === 5
+          ? durationDensity[3] + durationDensity[4]
+          : timeNearHighRatio;
+      const bottomOccupancy =
+        Array.isArray(durationDensity) && durationDensity.length === 5
+          ? durationDensity[0] + durationDensity[1]
+          : timeNearLowRatio;
+
+      if (
+        guard.allowBullContinuation &&
+        topOccupancy >= 0.52 &&
+        topOccupancy > bottomOccupancy * 2.2 &&
+        integratedFlowPressure >= 0.22 &&
+        kinematicRejection >= -0.10
+      ) {
         accDir = "CALL";
-        accScore = 0.30 + clamp(timeNearHighRatio * 0.80, 0.20, 0.60);
-      } else if (timeNearLowRatio >= 0.45 && timeNearLowRatio > timeNearHighRatio * 2.0) {
+        accScore = 0.34 + clamp(topOccupancy * 0.72, 0.24, 0.54);
+      } else if (
+        guard.allowBearContinuation &&
+        bottomOccupancy >= 0.52 &&
+        bottomOccupancy > topOccupancy * 2.2 &&
+        integratedFlowPressure <= -0.22 &&
+        kinematicRejection <= 0.10
+      ) {
         accDir = "PUT";
-        accScore = 0.30 + clamp(timeNearLowRatio * 0.80, 0.20, 0.60);
+        accScore = 0.34 + clamp(bottomOccupancy * 0.72, 0.24, 0.54);
       }
 
-      if (accDir && accScore >= 0.60) {
-        const rawProb = Number(clamp(0.50 + accScore * 0.20, 0.50, 0.70).toFixed(4));
-        const uncert = Number(clamp(0.04 - accScore * 0.012, 0.02, 0.05).toFixed(4));
-        const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+      if (accDir && accScore >= 0.66) {
+        const rawProb = Number(clamp(0.50 + accScore * 0.185, 0.50, 0.695).toFixed(4));
+        const uncert = Number(clamp(0.041 - accScore * 0.013, 0.022, 0.05).toFixed(4));
+        const structEffN = clamp(0.065 / (uncert * uncert), 42, 100);
+        const consProb = Number(computeWilsonLowerBound(rawProb, structEffN, 0.6745).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
         if (consProb > breakeven && edge >= 0.025) {
@@ -236,9 +367,12 @@ export class MicrostructureFamily {
             edge,
             maturity: "ACTIVE",
             regimeCompatibility: 1.0,
-            evidence: { timeNearHighRatio, timeNearLowRatio },
+            evidence: {
+              topOccupancy: Number(topOccupancy.toFixed(3)),
+              bottomOccupancy: Number(bottomOccupancy.toFixed(3)),
+            },
             reasons: [
-              `Aceitação de preço no extremo (${((accDir === "CALL" ? timeNearHighRatio : timeNearLowRatio) * 100).toFixed(0)}% do tempo)`,
+              `Aceitação temporal sustentada no extremo (${((accDir === "CALL" ? topOccupancy : bottomOccupancy) * 100).toFixed(0)}% da densidade)`,
             ],
             timestamp,
             fingerprint: `EXTRACC_${accDir}_${timestamp}`,
@@ -248,34 +382,56 @@ export class MicrostructureFamily {
     }
 
     // =========================================================================
-    // 3E — END-OF-MINUTE FLOW (Últimos 15s / 10s / 5s)
+    // 3E — END-OF-MINUTE FLOW (Impulso Limpo de Fechamento nos Últimos 15s)
     // =========================================================================
     {
       let eomDir = null;
       let eomScore = 0;
 
-      // Exige cobertura temporal mínima de ticks e desbalanceamento contínuo real
-      // Impede que poucos ticks quase neutros disparem por confusão de escala discreta
-      const minEomTicks = Math.max(10, this.minTicks);
-      if (tickCount >= minEomTicks && Math.abs(pressure) >= 0.18 && Math.abs(flowImbalance) >= 0.15) {
-        const directionalMagnitude = clamp(Math.abs(pressure) * 0.50 + Math.abs(flowImbalance) * 0.50, 0, 1);
+      // Exige desbalanceamento forte (>= 0.28) e pressão integrada expressiva (>= 0.34) para não disparar em ruído
+      const minEomTicks = Math.max(14, this.minTicks);
+      if (
+        tickCount >= minEomTicks &&
+        Math.abs(integratedFlowPressure) >= 0.34 &&
+        Math.abs(flowImbalance) >= 0.28
+      ) {
+        const directionalMagnitude = clamp(
+          Math.abs(integratedFlowPressure) * 0.55 + Math.abs(flowImbalance) * 0.45,
+          0,
+          1
+        );
 
-        if (lastTicksDirection > 0 && pressure > 0 && flowImbalance > 0) {
+        if (
+          guard.allowBullContinuation &&
+          lastTicksDirection > 0 &&
+          integratedFlowPressure > 0 &&
+          flowImbalance > 0 &&
+          priceVelocity >= 0 &&
+          kinematicRejection >= -0.10
+        ) {
           eomDir = "CALL";
-          eomScore = 0.35 + directionalMagnitude * 0.35;
-        } else if (lastTicksDirection < 0 && pressure < 0 && flowImbalance < 0) {
+          eomScore = 0.40 + directionalMagnitude * 0.42;
+        } else if (
+          guard.allowBearContinuation &&
+          lastTicksDirection < 0 &&
+          integratedFlowPressure < 0 &&
+          flowImbalance < 0 &&
+          priceVelocity <= 0 &&
+          kinematicRejection <= 0.10
+        ) {
           eomDir = "PUT";
-          eomScore = 0.35 + directionalMagnitude * 0.35;
+          eomScore = 0.40 + directionalMagnitude * 0.42;
         }
       }
 
-      if (eomDir && eomScore >= 0.50) {
-        const rawProb = Number(clamp(0.50 + eomScore * 0.21, 0.50, 0.71).toFixed(4));
-        const uncert = Number(clamp(0.045 - eomScore * 0.015, 0.02, 0.05).toFixed(4));
-        const consProb = Number((rawProb - 0.67 * uncert).toFixed(4));
+      if (eomDir && eomScore >= 0.64) {
+        const rawProb = Number(clamp(0.50 + eomScore * 0.185, 0.50, 0.695).toFixed(4));
+        const uncert = Number(clamp(0.043 - eomScore * 0.014, 0.023, 0.05).toFixed(4));
+        const structEffN = clamp(0.065 / (uncert * uncert), 40, 96);
+        const consProb = Number(computeWilsonLowerBound(rawProb, structEffN, 0.6745).toFixed(4));
         const edge = Number((consProb - breakeven).toFixed(4));
 
-        if (consProb > breakeven && edge >= 0.015) {
+        if (consProb > breakeven && edge >= 0.022) {
           opportunities.push({
             strategy: this.familyId,
             subStrategy: "END_OF_MINUTE_FLOW",
@@ -285,15 +441,15 @@ export class MicrostructureFamily {
             calibratedProbability: rawProb,
             conservativeProbability: consProb,
             uncertainty: uncert,
-            quality: Number(clamp(sampleConfidence * 0.90, 0.50, 0.95).toFixed(3)),
+            quality: Number(clamp(sampleConfidence * 0.92, 0.50, 0.95).toFixed(3)),
             breakevenProbability: Number(breakeven.toFixed(4)),
             edge,
             maturity: "LEARNING",
             regimeCompatibility: 1.0,
-            evidence: { lastTicksDirection, flowImbalance, pressure, tickCount },
+            evidence: { lastTicksDirection, flowImbalance, integratedFlowPressure, tickCount },
             reasons: [
-              `Vetor direcional contínuo de encerramento da M1 (${eomDir})`,
-              `Pressão sustentada (${(pressure * 100).toFixed(0)}%) e desbalanceamento (${(flowImbalance * 100).toFixed(0)}%)`,
+              `Fluxo dominante de fechamento da M1 (${eomDir})`,
+              `Pressão integrada (${(integratedFlowPressure * 100).toFixed(0)}%) e desequilíbrio (${(flowImbalance * 100).toFixed(0)}%)`,
             ],
             timestamp,
             fingerprint: `EOMFLOW_${eomDir}_${timestamp}`,
