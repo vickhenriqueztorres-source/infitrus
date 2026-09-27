@@ -179,7 +179,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
       valid: false,
       expired: false,
       reason: "MISSING_CODE",
-      message: "Digite ou cole seu código de licença.",
+      message: "Ingresa o pega tu clave de licencia.",
       payload: null,
     };
   }
@@ -189,7 +189,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
       valid: false,
       expired: false,
       reason: "INVALID_FORMAT",
-      message: "Formato inválido. O código deve começar com IFX-.",
+      message: "Formato inválido. La clave debe comenzar con IFX-.",
       payload: null,
     };
   }
@@ -201,7 +201,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
       valid: false,
       expired: false,
       reason: "INVALID_FORMAT",
-      message: "Código de licença incompleto ou malformado.",
+      message: "Clave de licencia incompleta o mal formada.",
       payload: null,
     };
   }
@@ -219,7 +219,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
       valid: false,
       expired: false,
       reason: "INVALID_FORMAT",
-      message: "Código de licença corrompido.",
+      message: "Clave de licencia dañada.",
       payload: null,
     };
   }
@@ -229,7 +229,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
       valid: false,
       expired: false,
       reason: "INVALID_SIGNATURE",
-      message: "Assinatura digital inválida ou adulterada.",
+      message: "Firma digital inválida o alterada.",
       payload: null,
     };
   }
@@ -249,7 +249,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
         valid: false,
         expired: false,
         reason: "INVALID_SIGNATURE",
-        message: "Código de licença inválido ou adulterado.",
+        message: "Clave de licencia inválida o alterada.",
         payload: null,
       };
     }
@@ -258,7 +258,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
       valid: false,
       expired: false,
       reason: "CRYPTO_ERROR",
-      message: `Erro ao validar assinatura: ${err?.message || String(err)}`,
+      message: `Error al verificar firma: ${err?.message || String(err)}`,
       payload: null,
     };
   }
@@ -270,7 +270,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
       valid: false,
       expired: false,
       reason: "INVALID_PAYLOAD",
-      message: "Dados internos da licença inválidos.",
+      message: "Datos internos de la licencia inválidos.",
       payload: null,
     };
   }
@@ -287,7 +287,7 @@ export async function verifyLicenseCode(rawCode, options = {}) {
       valid: false,
       expired: true,
       reason: "LICENSE_EXPIRED",
-      message: "Esta licença expirou. Entre no nosso Telegram para renovar seu acesso.",
+      message: "Esta licencia expiró. Únete a nuestro Telegram para renovar tu acceso.",
       payload: parsed,
       holder: parsed.holder,
       plan: parsed.plan,
@@ -307,9 +307,9 @@ export async function verifyLicenseCode(rawCode, options = {}) {
     ? Math.ceil(remainingMs / 3_600_000)
     : 99999;
   const remainingLabel = parsed.isLifetime
-    ? "Vitalícia"
+    ? "Vitalicia"
     : remainingDays > 1
-      ? `${remainingDays} dias`
+      ? `${remainingDays} días`
       : `${remainingHours}h`;
 
   return {
@@ -317,8 +317,8 @@ export async function verifyLicenseCode(rawCode, options = {}) {
     expired: false,
     reason: "VALID",
     message: parsed.isLifetime
-      ? `Licença Vitalícia ativa (${parsed.holder})`
-      : `Licença ativa · ${remainingDays} dia(s) restante(s)`,
+      ? `Licencia Vitalicia activa (${parsed.holder})`
+      : `Licencia activa · ${remainingDays} día(s) restante(s)`,
     code: `IFX-${payloadB64}.${sigB64}`,
     payload: parsed,
     holder: parsed.holder,
@@ -353,7 +353,7 @@ export class LicenseManager {
       isLifetime: false,
       remainingDays: 0,
       remainingLabel: "0m",
-      message: "Licença não ativada.",
+      message: "Licencia no activada.",
     };
     this._listeners = new Set();
     this._initStorageListeners();
@@ -404,7 +404,7 @@ export class LicenseManager {
           reason: "LICENSE_EXPIRED",
           remainingDays: 0,
           remainingLabel: "Expirada",
-          message: "Sua licença expirou. Renove no Telegram.",
+          message: "Tu licencia expiró. Renueva en Telegram.",
         };
         this._notifyListeners();
       }
@@ -432,7 +432,7 @@ export class LicenseManager {
       this._cachedStatus.reason = "LICENSE_EXPIRED";
       this._cachedStatus.remainingDays = 0;
       this._cachedStatus.remainingLabel = "Expirada";
-      this._cachedStatus.message = "Sua licença expirou. Renove no Telegram.";
+      this._cachedStatus.message = "Tu licencia expiró. Renueva en Telegram.";
       this._notifyListeners();
       return false;
     }
@@ -508,7 +508,7 @@ export class LicenseManager {
         remainingDays: 0,
         remainingLabel: "0m",
         reason: "NO_LICENSE",
-        message: "Insira seu código de licença para desbloquear a extensão.",
+        message: "Ingresa tu clave de licencia para desbloquear la terminal.",
       };
       this._notifyListeners();
       return this.getCachedStatus();
@@ -601,7 +601,7 @@ export class LicenseManager {
       remainingDays: 0,
       remainingLabel: "0m",
       reason: "LOGGED_OUT",
-      message: "Licença desconectada. Insira um código válido.",
+      message: "Licencia desconectada. Ingresa una clave válida.",
     };
     this._notifyListeners();
     return this.getCachedStatus();

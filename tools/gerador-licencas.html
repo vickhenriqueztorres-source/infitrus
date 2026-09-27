@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="es-419">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gerador de Licenças Oficial — Império FX</title>
+  <title>Inflitrus Signals — Generador Oficial de Licencias (ECDSA P-256)</title>
   <style>
     :root {
-      --bg-dark: #06090f;
-      --bg-card: #0e1420;
-      --bg-input: #090d16;
+      --bg-dark: #05080f;
+      --bg-card: rgba(12, 18, 30, 0.88);
+      --bg-input: rgba(6, 10, 18, 0.92);
       --border: rgba(255, 255, 255, 0.09);
       --gold: #f5b942;
       --emerald: #00e676;
@@ -22,24 +22,79 @@
       margin: 0;
       padding: 0;
     }
+    @keyframes bgGridMove {
+      0% { transform: perspective(500px) rotateX(28deg) translateY(0); }
+      100% { transform: perspective(500px) rotateX(28deg) translateY(40px); }
+    }
+    @keyframes orbPulse {
+      0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.45; }
+      50% { transform: translate(18px, -14px) scale(1.15); opacity: 0.75; }
+    }
+    @keyframes shimmerSweep {
+      0% { transform: translateX(-140%) skewX(-20deg); }
+      45%, 100% { transform: translateX(240%) skewX(-20deg); }
+    }
     body {
       font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-      background: radial-gradient(circle at top, #121c2d 0%, var(--bg-dark) 70%);
+      background: #05080f;
       color: var(--text);
       min-height: 100vh;
-      padding: 32px 16px;
+      padding: 36px 16px;
       display: flex;
       justify-content: center;
       align-items: flex-start;
+      position: relative;
+      overflow-x: hidden;
+    }
+    .ambient-grid {
+      position: fixed;
+      inset: -40%;
+      background-image:
+        linear-gradient(rgba(0, 230, 118, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(41, 182, 246, 0.045) 1px, transparent 1px);
+      background-size: 40px 40px;
+      animation: bgGridMove 5s linear infinite;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .ambient-orb {
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(70px);
+      pointer-events: none;
+      z-index: 0;
+      animation: orbPulse 8s ease-in-out infinite;
+    }
+    .ambient-orb.emerald {
+      width: 340px;
+      height: 340px;
+      top: -80px;
+      left: 10%;
+      background: radial-gradient(circle, rgba(0, 230, 118, 0.28), transparent 70%);
+    }
+    .ambient-orb.blue {
+      width: 320px;
+      height: 320px;
+      bottom: -80px;
+      right: 10%;
+      background: radial-gradient(circle, rgba(41, 182, 246, 0.24), transparent 70%);
+      animation-delay: -4s;
     }
     .container {
+      position: relative;
+      z-index: 1;
       width: 100%;
-      max-width: 760px;
+      max-width: 780px;
       background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 28px;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(0, 230, 118, 0.24);
+      border-radius: 20px;
+      padding: 30px;
+      box-shadow:
+        0 28px 70px rgba(0, 0, 0, 0.78),
+        0 0 40px rgba(0, 230, 118, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
     }
     .header {
       display: flex;
@@ -47,7 +102,9 @@
       align-items: center;
       border-bottom: 1px solid var(--border);
       padding-bottom: 18px;
-      margin-bottom: 24px;
+      margin-bottom: 22px;
+      flex-wrap: wrap;
+      gap: 12px;
     }
     .brand {
       display: flex;
@@ -56,12 +113,14 @@
     }
     .brand h1 {
       font-size: 22px;
-      font-weight: 800;
-      letter-spacing: 0.5px;
+      font-weight: 900;
+      letter-spacing: 0.8px;
       color: #fff;
     }
     .brand h1 span {
-      color: var(--emerald);
+      background: linear-gradient(90deg, #00e676, #29b6f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
     .brand p {
       font-size: 12px;
@@ -70,20 +129,20 @@
     .badge-admin {
       background: rgba(245, 185, 66, 0.14);
       color: var(--gold);
-      border: 1px solid rgba(245, 185, 66, 0.35);
-      padding: 6px 12px;
+      border: 1px solid rgba(245, 185, 66, 0.38);
+      padding: 6px 14px;
       border-radius: 999px;
       font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 0.8px;
+      font-weight: 800;
+      letter-spacing: 0.9px;
       text-transform: uppercase;
     }
     .warning-banner {
       background: rgba(255, 82, 82, 0.08);
-      border: 1px solid rgba(255, 82, 82, 0.25);
+      border: 1px solid rgba(255, 82, 82, 0.26);
       color: #ffadb5;
       padding: 12px 14px;
-      border-radius: 10px;
+      border-radius: 12px;
       font-size: 12px;
       margin-bottom: 22px;
       line-height: 1.45;
@@ -106,27 +165,28 @@
     }
     .field label {
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.7px;
       color: var(--muted);
     }
-    .field input, .field select {
+    .field input {
       background: var(--bg-input);
       border: 1px solid var(--border);
       color: var(--text);
       padding: 12px 14px;
-      border-radius: 10px;
+      border-radius: 11px;
       font-size: 14px;
       outline: none;
-      transition: border-color 0.2s;
+      transition: border-color 0.2s, box-shadow 0.2s;
     }
-    .field input:focus, .field select:focus {
+    .field input:focus {
       border-color: var(--emerald);
+      box-shadow: 0 0 0 3px rgba(0, 230, 118, 0.14);
     }
     .presets-label {
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.7px;
       color: var(--muted);
@@ -135,7 +195,7 @@
     }
     .presets-row {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
       gap: 8px;
       margin-bottom: 22px;
     }
@@ -144,47 +204,62 @@
       border: 1px solid var(--border);
       color: var(--text);
       padding: 10px 8px;
-      border-radius: 8px;
+      border-radius: 10px;
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.15s;
+      transition: all 0.18s;
       text-align: center;
     }
     .preset-btn:hover {
       background: rgba(0, 230, 118, 0.1);
       border-color: rgba(0, 230, 118, 0.4);
+      transform: translateY(-1px);
     }
     .preset-btn.active {
       background: rgba(0, 230, 118, 0.18);
       border-color: var(--emerald);
       color: var(--emerald);
-      font-weight: 700;
+      font-weight: 800;
+      box-shadow: 0 4px 16px rgba(0, 230, 118, 0.18);
     }
     .btn-generate {
+      position: relative;
+      overflow: hidden;
       width: 100%;
-      background: linear-gradient(135deg, #00e676 0%, #00b862 100%);
-      color: #04120a;
+      background: linear-gradient(135deg, #00e676 0%, #00c853 55%, #00b0ff 100%);
+      color: #03140a;
       border: none;
-      padding: 14px;
-      border-radius: 10px;
-      font-size: 15px;
-      font-weight: 800;
-      letter-spacing: 0.5px;
+      padding: 15px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 900;
+      letter-spacing: 0.7px;
       text-transform: uppercase;
       cursor: pointer;
-      box-shadow: 0 8px 24px rgba(0, 230, 118, 0.25);
-      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 10px 28px rgba(0, 230, 118, 0.3);
+      transition: transform 0.18s, box-shadow 0.18s;
+    }
+    .btn-generate::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      width: 45%;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+      animation: shimmerSweep 3.4s ease-in-out infinite;
+      pointer-events: none;
     }
     .btn-generate:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 12px 28px rgba(0, 230, 118, 0.35);
+      transform: translateY(-2px);
+      box-shadow: 0 14px 34px rgba(0, 230, 118, 0.42);
     }
     .result-box {
       margin-top: 24px;
-      background: #080c14;
-      border: 1px solid rgba(0, 230, 118, 0.35);
-      border-radius: 12px;
+      background: rgba(5, 9, 16, 0.95);
+      border: 1px solid rgba(0, 230, 118, 0.4);
+      border-radius: 14px;
       padding: 18px;
       display: none;
     }
@@ -194,7 +269,7 @@
     .result-meta {
       display: flex;
       flex-wrap: wrap;
-      gap: 12px;
+      gap: 14px;
       margin-bottom: 12px;
       font-size: 12px;
       color: var(--muted);
@@ -204,10 +279,10 @@
     }
     .code-output {
       width: 100%;
-      background: #04070c;
+      background: #03060b;
       border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
+      border-radius: 10px;
+      padding: 13px;
       font-family: 'Consolas', 'Courier New', monospace;
       font-size: 12px;
       color: var(--emerald);
@@ -223,25 +298,35 @@
     }
     .btn-copy {
       flex: 1;
+      min-width: 180px;
       background: rgba(0, 230, 118, 0.14);
-      border: 1px solid rgba(0, 230, 118, 0.4);
+      border: 1px solid rgba(0, 230, 118, 0.42);
       color: var(--emerald);
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 700;
+      padding: 11px 14px;
+      border-radius: 10px;
+      font-size: 12.5px;
+      font-weight: 800;
       cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-copy:hover {
+      background: rgba(0, 230, 118, 0.24);
     }
     .btn-copy-msg {
       flex: 1;
+      min-width: 180px;
       background: rgba(41, 182, 246, 0.14);
-      border: 1px solid rgba(41, 182, 246, 0.4);
+      border: 1px solid rgba(41, 182, 246, 0.42);
       color: var(--blue);
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 700;
+      padding: 11px 14px;
+      border-radius: 10px;
+      font-size: 12.5px;
+      font-weight: 800;
       cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-copy-msg:hover {
+      background: rgba(41, 182, 246, 0.24);
     }
     .history-section {
       margin-top: 28px;
@@ -255,9 +340,9 @@
       margin-bottom: 12px;
     }
     .history-header h3 {
-      font-size: 13px;
+      font-size: 12px;
       text-transform: uppercase;
-      letter-spacing: 0.7px;
+      letter-spacing: 0.8px;
       color: var(--muted);
     }
     .btn-clear-history {
@@ -272,16 +357,16 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
-      max-height: 220px;
+      max-height: 230px;
       overflow-y: auto;
     }
     .history-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(255, 255, 255, 0.025);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 10px 12px;
       font-size: 12px;
       gap: 10px;
@@ -296,65 +381,70 @@
       border: 1px solid var(--border);
       color: var(--text);
       padding: 6px 10px;
-      border-radius: 6px;
+      border-radius: 7px;
       font-size: 11px;
+      font-weight: 700;
       cursor: pointer;
       white-space: nowrap;
     }
   </style>
 </head>
 <body>
+  <div class="ambient-grid"></div>
+  <div class="ambient-orb emerald"></div>
+  <div class="ambient-orb blue"></div>
+
   <div class="container">
     <div class="header">
       <div class="brand">
-        <h1>IMPÉRIO <span>FX</span> — GERADOR DE LICENÇAS</h1>
-        <p>Painel Administrativo Criptográfico (ECDSA P-256) • Uso Exclusivo</p>
+        <h1>INFLITRUS <span>SIGNALS</span> — GENERADOR DE LICENCIAS</h1>
+        <p>Terminal Criptográfica de Administración (ECDSA P-256) • Uso Exclusivo</p>
       </div>
-      <span class="badge-admin">🔐 Chave Mestra Local</span>
+      <span class="badge-admin">🔐 Clave Maestra Local</span>
     </div>
 
     <div class="warning-banner">
-      ⚠️ <strong>ATENÇÃO (USO EXCLUSIVO):</strong> Este arquivo contém sua chave mestra de assinatura. Mantenha-o apenas no seu computador. Nunca envie a pasta <code>tools/</code> para os clientes.
+      ⚠️ <strong>USO EXCLUSIVO DE ADMINISTRADOR:</strong> Este panel contiene tu clave privada ECDSA P-256 para firmar licencias. Mantén este archivo únicamente en tu computadora y envía a los clientes solo la carpeta <code>dist-cliente/</code>.
     </div>
 
     <div class="form-grid">
       <div class="field">
-        <label for="holder-input">Nome ou WhatsApp/Telegram do Cliente</label>
-        <input type="text" id="holder-input" placeholder="Ex: João Silva (@joaosilva)" value="Cliente VIP">
+        <label for="holder-input">Nombre o Telegram/WhatsApp del Cliente</label>
+        <input type="text" id="holder-input" placeholder="Ej: Carlos Mendoza (@carlosm)" value="Cliente VIP">
       </div>
       <div class="field">
-        <label for="days-input">Validade em Dias (ou use os botões abaixo)</label>
+        <label for="days-input">Duración en Días (o elige un plan abajo)</label>
         <input type="number" id="days-input" min="0.04" max="36500" step="any" value="30">
       </div>
     </div>
 
-    <span class="presets-label">Atalhos Rápidos de Validade</span>
+    <span class="presets-label">Planes Rápidos de Licencia</span>
     <div class="presets-row">
-      <button type="button" class="preset-btn" data-days="1" data-plan="TRIAL">🧪 1 Dia (Teste)</button>
-      <button type="button" class="preset-btn" data-days="3" data-plan="TRIAL-3D">⚡ 3 Dias</button>
-      <button type="button" class="preset-btn" data-days="7" data-plan="SEMANAL">📅 7 Dias</button>
-      <button type="button" class="preset-btn" data-days="15" data-plan="QUINZENAL">📆 15 Dias</button>
-      <button type="button" class="preset-btn active" data-days="30" data-plan="MENSAL">🔥 30 Dias (Mensal)</button>
-      <button type="button" class="preset-btn" data-days="90" data-plan="TRIMESTRAL">💎 90 Dias</button>
-      <button type="button" class="preset-btn" data-days="365" data-plan="ANUAL">👑 1 Ano</button>
-      <button type="button" class="preset-btn" data-days="3650" data-plan="VITALICIO">♾️ Vitalício</button>
+      <button type="button" class="preset-btn" data-days="1" data-plan="TRIAL">🧪 1 Día (Trial)</button>
+      <button type="button" class="preset-btn" data-days="3" data-plan="TRIAL-3D">⚡ 3 Días</button>
+      <button type="button" class="preset-btn" data-days="7" data-plan="SEMANAL">📅 7 Días</button>
+      <button type="button" class="preset-btn" data-days="15" data-plan=" QUINCENAL">📆 15 Días</button>
+      <button type="button" class="preset-btn active" data-days="30" data-plan="MENSUAL">🔥 30 Días (Mensual)</button>
+      <button type="button" class="preset-btn" data-days="90" data-plan="TRIMESTRAL">💎 90 Días</button>
+      <button type="button" class="preset-btn" data-days="365" data-plan="ANUAL">👑 1 Año</button>
+      <button type="button" class="preset-btn" data-days="3650" data-plan="VITALICIA">♾️ Vitalicia</button>
     </div>
 
-    <button type="button" class="btn-generate" id="btn-generate">Gerar Código de Licença Agora</button>
+    <button type="button" class="btn-generate" id="btn-generate">⚡ Generar Clave de Licencia Ahora</button>
 
     <div class="result-box" id="result-box">
       <div class="result-meta" id="result-meta"></div>
       <div class="code-output" id="code-output"></div>
       <div class="action-row">
-        <button type="button" class="btn-copy" id="btn-copy-code">📋 Copiar Apenas o Código</button>
-        <button type="button" class="btn-copy-msg" id="btn-copy-msg">💬 Copiar Mensagem Pronta p/ Cliente</button>
+        <button type="button" class="btn-copy" id="btn-copy-code">📋 Copiar Solo la Clave</button>
+        <button type="button" class="btn-copy-msg" id="btn-copy-msg">🇪🇸 Copiar Mensaje Listo (Español)</button>
       </div>
     </div>
 
     <div class="history-section">
       <div class="history-header">
-        <h3>Últimas Licenças Geradas Neste Computador</h3>
-        <button type="button" class="btn-clear-history" id="btn-clear-history">Limpar histórico</button>
+        <h3>Últimas Licencias Generadas en esta Computadora</h3>
+        <button type="button" class="btn-clear-history" id="btn-clear-history">Limpiar historial</button>
       </div>
       <div class="history-list" id="history-list"></div>
     </div>
@@ -371,7 +461,7 @@
       d: 'FJgJ917Oj5v6ddeFb85kLo1-O-Vbe1JsW5-2GxyP4SU'
     };
 
-    let selectedPlan = 'MENSAL';
+    let selectedPlan = 'MENSUAL';
     let lastGenerated = null;
 
     function bytesToBase64Url(bytes) {
@@ -389,8 +479,8 @@
       const payloadObj = {
         v: 1,
         id,
-        sub: holder || 'Cliente VIP',
-        plan: plan || 'PRO',
+        sub: (holder || 'Cliente VIP').trim(),
+        plan: (plan || 'PRO').trim(),
         iat: nowMs,
         exp: expMs
       };
@@ -424,7 +514,7 @@
         presetButtons.forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         daysInput.value = btn.dataset.days;
-        selectedPlan = btn.dataset.plan || 'PRO';
+        selectedPlan = (btn.dataset.plan || 'PRO').trim();
       });
     });
 
@@ -432,8 +522,8 @@
       const val = Number(daysInput.value);
       if (val <= 1) selectedPlan = 'TRIAL';
       else if (val <= 7) selectedPlan = 'SEMANAL';
-      else if (val <= 31) selectedPlan = 'MENSAL';
-      else if (val >= 3650) selectedPlan = 'VITALICIO';
+      else if (val <= 31) selectedPlan = 'MENSUAL';
+      else if (val >= 3650) selectedPlan = 'VITALICIA';
       else selectedPlan = 'PRO';
     });
 
@@ -456,25 +546,25 @@
       const listEl = document.getElementById('history-list');
       const items = loadHistory();
       if (!items.length) {
-        listEl.innerHTML = '<div style="color:#8b9bb4;font-size:12px;">Nenhuma licença gerada ainda.</div>';
+        listEl.innerHTML = '<div style="color:#8b9bb4;font-size:12px;">Ninguna licencia generada aún.</div>';
         return;
       }
       listEl.innerHTML = '';
       items.forEach((item) => {
         const row = document.createElement('div');
         row.className = 'history-item';
-        const expStr = new Date(item.payload.exp).toLocaleDateString('pt-BR');
+        const expStr = new Date(item.payload.exp).toLocaleDateString('es-419');
         row.innerHTML = `
           <div class="history-item-info">
             <strong>${item.payload.sub} • <span style="color:#00e676">${item.payload.plan}</span> (${item.durationDays}d)</strong>
-            <span style="color:#8b9bb4">ID: ${item.payload.id} • Expira em ${expStr}</span>
+            <span style="color:#8b9bb4">ID: ${item.payload.id} • Vence el ${expStr}</span>
           </div>
-          <button type="button" class="history-item-btn">Copiar Código</button>
+          <button type="button" class="history-item-btn">Copiar Clave</button>
         `;
         row.querySelector('button').addEventListener('click', (e) => {
           navigator.clipboard.writeText(item.code);
-          e.target.textContent = '✅ Copiado!';
-          setTimeout(() => { e.target.textContent = 'Copiar Código'; }, 1500);
+          e.target.textContent = '✅ ¡Copiada!';
+          setTimeout(() => { e.target.textContent = 'Copiar Clave'; }, 1500);
         });
         listEl.appendChild(row);
       });
@@ -486,11 +576,11 @@
       const res = await generateLicense(holder, days, selectedPlan);
       lastGenerated = res;
 
-      const expFormatted = new Date(res.payload.exp).toLocaleString('pt-BR');
+      const expFormatted = new Date(res.payload.exp).toLocaleString('es-419');
       document.getElementById('result-meta').innerHTML = `
         <span>👤 Cliente: <strong>${res.payload.sub}</strong></span>
-        <span>🏷️ Plano: <strong>${res.payload.plan} (${days} dias)</strong></span>
-        <span>📅 Expira em: <strong>${expFormatted}</strong></span>
+        <span>🏷️ Plan: <strong>${res.payload.plan} (${days} día(s))</strong></span>
+        <span>📅 Válida hasta: <strong>${expFormatted}</strong></span>
       `;
       document.getElementById('code-output').textContent = res.code;
       document.getElementById('result-box').classList.add('visible');
@@ -502,29 +592,29 @@
       navigator.clipboard.writeText(lastGenerated.code);
       const btn = e.currentTarget;
       const original = btn.textContent;
-      btn.textContent = '✅ Código Copiado!';
+      btn.textContent = '✅ ¡Clave Copiada!';
       setTimeout(() => { btn.textContent = original; }, 1800);
     });
 
     document.getElementById('btn-copy-msg').addEventListener('click', (e) => {
       if (!lastGenerated) return;
-      const expDate = new Date(lastGenerated.payload.exp).toLocaleString('pt-BR');
+      const expDate = new Date(lastGenerated.payload.exp).toLocaleString('es-419');
       const msg = [
-        `🚀 *SUA LICENÇA IMPÉRIO FX ESTÁ ATIVA!*`,
+        `🚀 *¡TU LICENCIA INFLITRUS SIGNALS ESTÁ ACTIVA!*`,
         ``,
         `👤 *Cliente:* ${lastGenerated.payload.sub}`,
-        `🏷️ *Plano:* ${lastGenerated.payload.plan} (${lastGenerated.durationDays} dia(s))`,
-        `📅 *Válida até:* ${expDate}`,
+        `🏷️ *Plan:* ${lastGenerated.payload.plan} (${lastGenerated.durationDays} día(s))`,
+        `📅 *Válida hasta:* ${expDate}`,
         ``,
-        `🔑 *Seu Código de Ativação:*`,
+        `🔑 *Tu Clave de Activación:*`,
         `${lastGenerated.code}`,
         ``,
-        `📌 *Como ativar:* Abra a extensão Império FX no navegador, cole o código acima no Painel de Login e clique em *Ativar Licença*.`
+        `📌 *Cómo activar:* Abre la extensión *Inflitrus Signals* en tu navegador, pega la clave arriba en la Terminal de Acceso y haz clic en *⚡ Desbloquear Terminal*.`
       ].join('\n');
       navigator.clipboard.writeText(msg);
       const btn = e.currentTarget;
       const original = btn.textContent;
-      btn.textContent = '✅ Mensagem Copiada!';
+      btn.textContent = '✅ ¡Mensaje Copiado!';
       setTimeout(() => { btn.textContent = original; }, 1800);
     });
 

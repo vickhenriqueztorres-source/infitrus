@@ -56,13 +56,13 @@ function renderLicenseUI(snapshot = null) {
   if (headerBadge) {
     if (isAuthorized && snap?.payload) {
       headerBadge.classList.remove("is-locked");
-      headerBadge.textContent = `🔑 ${snap.payload.plan || "PRO"} · ${snap.remainingLabel || "Ativa"}`;
+      headerBadge.textContent = `🔑 ${snap.payload.plan || "PRO"} · ${snap.remainingLabel || "Activa"}`;
     } else if (!isAuthorized) {
       headerBadge.classList.add("is-locked");
       headerBadge.textContent = "🔒 Bloqueado";
     } else {
       headerBadge.classList.remove("is-locked");
-      headerBadge.textContent = "🔑 Licença";
+      headerBadge.textContent = "🔑 Licencia";
     }
   }
 
@@ -75,17 +75,17 @@ function renderLicenseUI(snapshot = null) {
   if (snap?.valid && snap?.payload) {
     if (holderEl) holderEl.textContent = snap.payload.sub || "Cliente VIP";
     if (planEl) planEl.textContent = snap.payload.plan || "PRO";
-    if (remEl) remEl.textContent = snap.remainingLabel || "Ativa";
+    if (remEl) remEl.textContent = snap.remainingLabel || "Activa";
     if (expEl) {
       const expDate = new Date(snap.payload.exp);
-      expEl.textContent = snap.remainingDays >= 3650 ? "Vitalícia" : expDate.toLocaleDateString("pt-BR");
+      expEl.textContent = snap.remainingDays >= 3650 ? "Vitalicia" : expDate.toLocaleDateString("es-419");
     }
     if (statusTagEl) {
-      statusTagEl.textContent = "ATIVA";
+      statusTagEl.textContent = "ACTIVA";
       statusTagEl.classList.add("highlight");
     }
   } else {
-    if (holderEl) holderEl.textContent = "Não ativada";
+    if (holderEl) holderEl.textContent = "No activada";
     if (planEl) planEl.textContent = "---";
     if (remEl) remEl.textContent = "0m";
     if (expEl) expEl.textContent = "---";
@@ -1308,6 +1308,14 @@ async function initSidepanel() {
   document.getElementById("btn-open-telegram-support")?.addEventListener("click", () => openTelegramUrl(TELEGRAM_CONFIG.SUPPORT_URL));
   document.getElementById("license-telegram-btn")?.addEventListener("click", () => openTelegramUrl(TELEGRAM_CONFIG.SUPPORT_URL));
 
+  const triggerGateShake = () => {
+    const gateBox = document.getElementById("license-gate-box");
+    if (!gateBox) return;
+    gateBox.classList.remove("is-shake");
+    void gateBox.offsetWidth;
+    gateBox.classList.add("is-shake");
+  };
+
   const handleActivateLicense = async () => {
     const inputEl = document.getElementById("license-code-input");
     const feedbackEl = document.getElementById("license-feedback-msg");
@@ -1317,19 +1325,20 @@ async function initSidepanel() {
     if (!rawCode) {
       if (feedbackEl) {
         feedbackEl.classList.remove("is-ok");
-        feedbackEl.textContent = "⚠️ Cole seu código de licença (IFX-...) para continuar.";
+        feedbackEl.textContent = "⚠️ Pega tu clave de licencia (IFX-...) para continuar.";
       }
+      triggerGateShake();
       return;
     }
 
-    if (btnEl) btnEl.textContent = "⏳ Validando assinatura...";
+    if (btnEl) btnEl.textContent = "⏳ Verificando firma digital...";
     const res = await licenseManager.activateCode(rawCode);
-    if (btnEl) btnEl.textContent = "🔓 Ativar Licença Agora";
+    if (btnEl) btnEl.textContent = "⚡ Desbloquear Terminal";
 
     if (res.valid) {
       if (feedbackEl) {
         feedbackEl.classList.add("is-ok");
-        feedbackEl.textContent = `✅ Licença ${res.payload?.plan || "PRO"} ativada com sucesso!`;
+        feedbackEl.textContent = `✅ ¡Licencia ${res.payload?.plan || "PRO"} activada con éxito!`;
       }
       if (inputEl) inputEl.value = "";
       if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
@@ -1341,8 +1350,9 @@ async function initSidepanel() {
     } else {
       if (feedbackEl) {
         feedbackEl.classList.remove("is-ok");
-        feedbackEl.textContent = `❌ ${res.message || "Código inválido ou expirado."}`;
+        feedbackEl.textContent = `❌ ${res.message || "Clave inválida o expirada."}`;
       }
+      triggerGateShake();
       renderLicenseUI(res);
     }
   };

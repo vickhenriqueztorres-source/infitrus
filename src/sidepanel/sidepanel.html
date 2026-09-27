@@ -172,56 +172,167 @@
 
     /* Header License Badge */
     header{display:flex;align-items:center;justify-content:space-between;gap:8px}
-    .license-header-badge{padding:3px 8px;border-radius:999px;font-size:9px;font-weight:700;letter-spacing:.04em;cursor:pointer;border:1px solid rgba(63,224,197,.4);background:rgba(63,224,197,.12);color:#3FE0C5;transition:all .15s;white-space:nowrap}
-    .license-header-badge:hover{background:rgba(63,224,197,.22)}
-    .license-header-badge.is-locked{border-color:rgba(255,90,110,.5);background:rgba(255,90,110,.15);color:#FF5A6E}
+    .license-header-badge{padding:4px 9px;border-radius:999px;font-size:9px;font-weight:800;letter-spacing:.05em;cursor:pointer;border:1px solid rgba(63,224,197,.45);background:linear-gradient(135deg,rgba(63,224,197,.18) 0%,rgba(41,182,246,.10) 100%);color:#3FE0C5;transition:all .2s cubic-bezier(.16,1,.3,1);white-space:nowrap;box-shadow:0 0 12px rgba(63,224,197,.15)}
+    .license-header-badge:hover{transform:translateY(-1px) scale(1.03);background:rgba(63,224,197,.26);box-shadow:0 0 16px rgba(63,224,197,.32)}
+    .license-header-badge.is-locked{border-color:rgba(255,90,110,.55);background:rgba(255,90,110,.15);color:#FF5A6E;box-shadow:0 0 12px rgba(255,90,110,.2)}
 
-    /* Aba Telegram & Licença */
-    .telegram-hero-card{margin-top:8px;padding:14px 12px;border-radius:12px;border:1px solid rgba(41,182,246,.45);background:linear-gradient(165deg,rgba(41,182,246,.16) 0%,rgba(11,26,31,.96) 100%);text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.3)}
-    .telegram-hero-icon{font-size:28px;line-height:1;margin-bottom:6px;display:block}
-    .telegram-hero-card h3{margin:0 0 4px;font-size:13px;font-weight:800;color:#FFFFFF;letter-spacing:.03em}
-    .telegram-hero-card p{margin:0 0 12px;font-size:9.5px;color:var(--ice,#E6EEF0);line-height:1.45;opacity:.9}
-    .btn-telegram-main{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:10px 12px;border-radius:8px;border:none;background:linear-gradient(135deg,#29B6F6 0%,#0288D1 100%);color:#FFFFFF;font-family:inherit;font-size:11px;font-weight:800;letter-spacing:.04em;cursor:pointer;text-decoration:none;box-shadow:0 4px 14px rgba(41,182,246,.35);transition:transform .15s,box-shadow .15s}
-    .btn-telegram-main:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(41,182,246,.5)}
-    .btn-telegram-sub{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:7px;padding:8px 10px;border-radius:8px;border:1px solid rgba(41,182,246,.4);background:rgba(41,182,246,.1);color:#29B6F6;font-family:inherit;font-size:10px;font-weight:700;cursor:pointer;text-decoration:none;transition:all .15s}
-    .btn-telegram-sub:hover{background:rgba(41,182,246,.2);color:#fff}
+    /* ==========================================================================
+       MOTION DESIGN: ABA TELEGRAM & LICENCIA (ESPAÑOL)
+       ========================================================================== */
+    .telegram-hero-card{position:relative;overflow:hidden;margin-top:8px;padding:18px 14px;border-radius:14px;border:1px solid rgba(41,182,246,.45);background:radial-gradient(120% 120% at 50% 0%,rgba(41,182,246,.22) 0%,rgba(11,26,31,.96) 65%,rgba(7,17,21,.98) 100%);text-align:center;box-shadow:0 12px 30px rgba(0,0,0,.45),inset 0 1px 0 rgba(255,255,255,.12);animation:lgCardEnter .5s cubic-bezier(.16,1,.3,1) both}
+    .telegram-hero-icon{width:50px;height:50px;margin:0 auto 10px;border-radius:14px;background:linear-gradient(135deg,rgba(41,182,246,.25),rgba(2,136,209,.12));border:1px solid rgba(41,182,246,.5);display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 0 22px rgba(41,182,246,.3);animation:lgFloatIcon 3.2s ease-in-out infinite}
+    .telegram-hero-card h3{margin:0 0 5px;font-size:13.5px;font-weight:900;color:#FFFFFF;letter-spacing:.05em;text-transform:uppercase}
+    .telegram-hero-card p{margin:0 0 14px;font-size:9.5px;color:var(--ice,#E6EEF0);line-height:1.5;opacity:.88}
+    .btn-telegram-main{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:7px;width:100%;padding:11px 12px;border-radius:9px;border:none;background:linear-gradient(135deg,#29B6F6 0%,#0288D1 100%);color:#FFFFFF;font-family:inherit;font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;cursor:pointer;text-decoration:none;box-shadow:0 6px 20px rgba(41,182,246,.38);transition:all .2s cubic-bezier(.16,1,.3,1)}
+    .btn-telegram-main::after{content:"";position:absolute;top:0;left:-120%;width:65%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.32),transparent);transform:skewX(-25deg);animation:lgShimmer 3.5s infinite}
+    .btn-telegram-main:hover{transform:translateY(-2px);box-shadow:0 10px 26px rgba(41,182,246,.55)}
+    .btn-telegram-sub{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:8px;padding:9px 10px;border-radius:9px;border:1px solid rgba(41,182,246,.38);background:rgba(41,182,246,.09);color:#58C8F8;font-family:inherit;font-size:10px;font-weight:700;cursor:pointer;text-decoration:none;transition:all .2s cubic-bezier(.16,1,.3,1)}
+    .btn-telegram-sub:hover{background:rgba(41,182,246,.2);border-color:#29B6F6;color:#FFFFFF;transform:translateY(-1px)}
 
-    .license-card{margin-top:10px;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--surface)}
-    .license-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
-    .license-item{padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.25);border:1px solid var(--border)}
-    .license-item label{display:block;font-size:8px;color:var(--steel);margin-bottom:2px}
+    .license-card{margin-top:10px;padding:13px;border-radius:12px;border:1px solid rgba(63,224,197,.25);background:linear-gradient(180deg,rgba(16,36,44,.9) 0%,rgba(10,23,28,.95) 100%);box-shadow:0 8px 24px rgba(0,0,0,.3);animation:lgCardEnter .6s .06s cubic-bezier(.16,1,.3,1) both}
+    .license-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px}
+    .license-item{padding:7px 9px;border-radius:8px;background:rgba(0,0,0,.32);border:1px solid rgba(255,255,255,.06);transition:border-color .2s}
+    .license-item:hover{border-color:rgba(63,224,197,.35)}
+    .license-item label{display:block;font-size:7.5px;color:var(--steel);letter-spacing:.06em;margin-bottom:3px;font-weight:700}
     .license-item strong{font-size:10.5px;color:var(--ice);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .btn-logout-license{width:100%;margin-top:10px;padding:8px 10px;border-radius:7px;border:1px solid rgba(255,90,110,.4);background:rgba(255,90,110,.1);color:#FF5A6E;font-family:inherit;font-size:9.5px;font-weight:700;cursor:pointer;transition:all .15s}
-    .btn-logout-license:hover{background:rgba(255,90,110,.22)}
+    .btn-logout-license{width:100%;margin-top:11px;padding:9px 10px;border-radius:8px;border:1px solid rgba(255,90,110,.38);background:rgba(255,90,110,.09);color:#FF5A6E;font-family:inherit;font-size:9.5px;font-weight:800;letter-spacing:.03em;cursor:pointer;transition:all .2s cubic-bezier(.16,1,.3,1)}
+    .btn-logout-license:hover{background:rgba(255,90,110,.22);border-color:#FF5A6E;transform:translateY(-1px);box-shadow:0 4px 14px rgba(255,90,110,.25)}
 
-    /* Painel de Login / Ativação por Código (Bloqueio Total) */
-    .license-gate-overlay{position:fixed;inset:0;z-index:9999;background:radial-gradient(circle at top,#10262E 0%,#071216 75%);display:none;flex-direction:column;justify-content:center;align-items:center;padding:18px;box-sizing:border-box}
+    /* ==========================================================================
+       MOTION DESIGN: TERMINAL DE LOGIN / ACTIVACIÓN CRIPTOGRÁFICA
+       ========================================================================== */
+    @keyframes lgGridFlow{0%{background-position:0 0,0 0}100%{background-position:0 32px,32px 0}}
+    @keyframes lgOrbFloat{0%,100%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(14px,-18px,0) scale(1.12)}}
+    @keyframes lgOrbFloatAlt{0%,100%{transform:translate3d(0,0,0) scale(1)}50%{transform:translate3d(-16px,14px,0) scale(1.15)}}
+    @keyframes lgCardEnter{0%{opacity:0;transform:translateY(18px) scale(.96)}100%{opacity:1;transform:translateY(0) scale(1)}}
+    @keyframes lgSonarRing{0%{transform:scale(.8);opacity:.75}100%{transform:scale(1.95);opacity:0}}
+    @keyframes lgFloatIcon{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+    @keyframes lgShimmer{0%{left:-120%}45%,100%{left:140%}}
+    @keyframes lgWaveStroke{0%{stroke-dashoffset:120}50%{stroke-dashoffset:0}100%{stroke-dashoffset:-120}}
+    @keyframes lgScanline{0%{top:-15%;opacity:0}20%{opacity:.55}80%{opacity:.55}100%{top:110%;opacity:0}}
+    @keyframes lgErrorShake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+
+    .license-gate-overlay{position:fixed;inset:0;z-index:9999;background:#050D10;display:none;flex-direction:column;justify-content:center;align-items:center;padding:16px;box-sizing:border-box;overflow:hidden}
     .license-gate-overlay.is-visible{display:flex}
-    .license-gate-box{width:100%;max-width:360px;background:rgba(14,31,38,.96);border:1px solid rgba(63,224,197,.35);border-radius:14px;padding:20px 16px;box-shadow:0 18px 45px rgba(0,0,0,.75);text-align:center}
-    .license-gate-lock{width:46px;height:46px;margin:0 auto 10px;border-radius:50%;background:rgba(63,224,197,.14);border:1px solid rgba(63,224,197,.45);display:flex;align-items:center;justify-content:center;font-size:22px}
-    .license-gate-box h2{margin:0 0 5px;font-size:15px;font-weight:900;color:#FFFFFF;letter-spacing:.04em}
-    .license-gate-box p{margin:0 0 14px;font-size:10px;color:var(--steel,#8A9BA3);line-height:1.45}
-    .license-input{width:100%;box-sizing:border-box;padding:11px 10px;border-radius:8px;border:1px solid var(--border,#8A9BA344);background:#071115;color:#3FE0C5;font-family:'JetBrains Mono',monospace;font-size:10.5px;outline:none;margin-bottom:8px;text-align:center}
-    .license-input:focus{border-color:#3FE0C5;box-shadow:0 0 10px rgba(63,224,197,.22)}
-    .btn-activate-license{width:100%;padding:11px;border-radius:8px;border:none;background:linear-gradient(135deg,#3FE0C5 0%,#14B8A6 100%);color:#061519;font-family:inherit;font-size:11.5px;font-weight:900;letter-spacing:.05em;text-transform:uppercase;cursor:pointer;box-shadow:0 6px 18px rgba(63,224,197,.28);transition:all .15s}
-    .btn-activate-license:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(63,224,197,.4)}
-    .license-feedback{min-height:16px;margin:8px 0 6px;font-size:9.5px;font-weight:600;color:#FF5A6E}
-    .license-feedback.is-ok{color:#3FE0C5}
-    .license-gate-divider{height:1px;background:var(--border,#8A9BA322);margin:12px 0}
+
+    /* Camada de Grade Cibernética & Orbes de Luz em Movimento */
+    .lg-bg-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(63,224,197,.045) 1px,transparent 1px),linear-gradient(90deg,rgba(63,224,197,.045) 1px,transparent 1px);background-size:28px 28px;animation:lgGridFlow 6s linear infinite;pointer-events:none}
+    .lg-orb{position:absolute;border-radius:50%;filter:blur(46px);pointer-events:none;opacity:.42}
+    .lg-orb.orb-teal{width:190px;height:190px;top:-40px;left:-40px;background:radial-gradient(circle,#3FE0C5 0%,transparent 70%);animation:lgOrbFloat 7s ease-in-out infinite}
+    .lg-orb.orb-blue{width:210px;height:210px;bottom:-50px;right:-40px;background:radial-gradient(circle,#29B6F6 0%,transparent 70%);animation:lgOrbFloatAlt 8.5s ease-in-out infinite}
+
+    /* Card Principal Glassmórfico com Scanner Laser */
+    .license-gate-box{position:relative;z-index:2;width:100%;max-width:368px;background:linear-gradient(165deg,rgba(15,35,43,.92) 0%,rgba(7,17,22,.97) 100%);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid rgba(63,224,197,.38);border-radius:18px;padding:22px 18px 18px;box-shadow:0 24px 60px rgba(0,0,0,.82),0 0 32px rgba(63,224,197,.12),inset 0 1px 0 rgba(255,255,255,.12);text-align:center;overflow:hidden;animation:lgCardEnter .55s cubic-bezier(.16,1,.3,1) both}
+    .license-gate-box.is-shake{animation:lgErrorShake .4s ease}
+    .lg-scanline{position:absolute;left:0;right:0;height:1.5px;background:linear-gradient(90deg,transparent,rgba(63,224,197,.65),rgba(41,182,246,.65),transparent);box-shadow:0 0 12px #3FE0C5;pointer-events:none;animation:lgScanline 4.2s ease-in-out infinite}
+
+    /* Pílula Superior de Segurança */
+    .lg-security-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:rgba(63,224,197,.1);border:1px solid rgba(63,224,197,.32);color:#3FE0C5;font-size:8.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;margin-bottom:14px}
+    .lg-sec-dot{width:6px;height:6px;border-radius:50%;background:#3FE0C5;box-shadow:0 0 8px #3FE0C5;animation:pulse 1.2s infinite}
+
+    /* Emblema Central Animado com Anéis de Sonar */
+    .lg-emblem-wrap{position:relative;width:62px;height:62px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center}
+    .lg-sonar-ring{position:absolute;inset:0;border-radius:50%;border:1.5px solid rgba(63,224,197,.45);animation:lgSonarRing 2.6s cubic-bezier(.16,1,.3,1) infinite}
+    .lg-sonar-ring.delay-2{animation-delay:1.3s;border-color:rgba(41,182,246,.4)}
+    .license-gate-lock{position:relative;z-index:2;width:54px;height:54px;border-radius:16px;background:linear-gradient(145deg,rgba(63,224,197,.22) 0%,rgba(11,26,31,.95) 100%);border:1.5px solid rgba(63,224,197,.65);display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(63,224,197,.25),inset 0 1px 0 rgba(255,255,255,.2);animation:lgFloatIcon 3s ease-in-out infinite}
+    .license-gate-lock svg{width:26px;height:26px;stroke:#3FE0C5;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 6px rgba(63,224,197,.55))}
+
+    /* Tipografia e Subtítulo */
+    .lg-brand-kicker{display:block;font-size:8.5px;font-weight:800;color:#58C8F8;letter-spacing:.16em;text-transform:uppercase;margin-bottom:3px}
+    .license-gate-box h2{margin:0 0 6px;font-size:17px;font-weight:900;color:#FFFFFF;letter-spacing:.05em;text-transform:uppercase;text-shadow:0 2px 12px rgba(63,224,197,.22)}
+    .license-gate-box p{margin:0 0 14px;font-size:9.8px;color:var(--steel,#98ABB3);line-height:1.5}
+
+    /* Onda Quant Animada Decorativa */
+    .lg-wave-divider{width:100%;height:18px;margin:0 0 12px;overflow:visible}
+    .lg-wave-divider path{fill:none;stroke:url(#lgWaveGrad);stroke-width:1.8;stroke-linecap:round;stroke-dasharray:120;animation:lgWaveStroke 3.6s ease-in-out infinite}
+
+    /* Campo de Código com Glow Reativo */
+    .lg-input-group{text-align:left;margin-bottom:10px}
+    .lg-input-label{display:flex;justify-content:space-between;align-items:center;font-size:8px;font-weight:800;color:var(--steel,#8A9BA3);letter-spacing:.08em;text-transform:uppercase;margin-bottom:5px;padding:0 2px}
+    .lg-input-label span:last-child{color:#3FE0C5;font-weight:700}
+    .license-input{width:100%;box-sizing:border-box;padding:12px 12px;border-radius:10px;border:1.5px solid rgba(138,155,163,.28);background:rgba(4,11,14,.92);color:#3FE0C5;font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:700;letter-spacing:.03em;outline:none;text-align:center;transition:all .22s cubic-bezier(.16,1,.3,1);box-shadow:inset 0 2px 8px rgba(0,0,0,.6)}
+    .license-input::placeholder{color:rgba(138,155,163,.45);font-weight:500}
+    .license-input:focus{border-color:#3FE0C5;background:#061318;box-shadow:0 0 18px rgba(63,224,197,.26),inset 0 2px 8px rgba(0,0,0,.6);transform:translateY(-1px)}
+
+    /* Botão Principal com Shimmer Motion */
+    .btn-activate-license{position:relative;overflow:hidden;width:100%;padding:12.5px;border-radius:10px;border:none;background:linear-gradient(135deg,#3FE0C5 0%,#14B8A6 55%,#0EA5E9 100%);color:#041216;font-family:inherit;font-size:11.5px;font-weight:900;letter-spacing:.07em;text-transform:uppercase;cursor:pointer;box-shadow:0 8px 24px rgba(63,224,197,.32);transition:all .22s cubic-bezier(.16,1,.3,1)}
+    .btn-activate-license::after{content:"";position:absolute;top:0;left:-120%;width:60%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);transform:skewX(-25deg);animation:lgShimmer 3s infinite}
+    .btn-activate-license:hover{transform:translateY(-2px) scale(1.01);box-shadow:0 12px 28px rgba(63,224,197,.48)}
+    .btn-activate-license:active{transform:translateY(0) scale(.99)}
+
+    .license-feedback{min-height:16px;margin:9px 0 6px;font-size:9.5px;font-weight:700;color:#FF5A6E;transition:all .2s}
+    .license-feedback.is-ok{color:#3FE0C5;text-shadow:0 0 10px rgba(63,224,197,.35)}
+
+    /* Pílulas de Especificações Quant */
+    .lg-specs-row{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:10px 0 12px}
+    .lg-spec-chip{padding:5px 4px;border-radius:7px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);font-size:8px;font-weight:700;color:var(--ice,#E6EEF0);letter-spacing:.02em}
+    .lg-spec-chip b{display:block;color:#3FE0C5;font-size:8.5px;margin-bottom:1px}
+
+    .license-gate-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(138,155,163,.25),transparent);margin:10px 0}
   </style>
 </head>
 <body>
-  <!-- PAINEL DE LOGIN / ATIVAÇÃO DE LICENÇA -->
+  <!-- TERMINAL DE LOGIN / ACTIVACIÓN DE LICENCIA (MOTION DESIGN · ESPAÑOL) -->
   <div id="license-gate-overlay" class="license-gate-overlay" role="dialog" aria-modal="true" aria-labelledby="license-gate-title">
-    <div class="license-gate-box">
-      <div class="license-gate-lock">🔐</div>
-      <h2 id="license-gate-title">ACESSO EXCLUSIVO</h2>
-      <p>Insira seu código de licença oficial para desbloquear o motor quantitativo M1 e os sinais em tempo real.</p>
-      <input id="license-code-input" class="license-input" type="text" placeholder="Cole seu código IFX-... aqui" autocomplete="off" spellcheck="false">
-      <button id="license-activate-btn" class="btn-activate-license" type="button">🔓 Ativar Licença Agora</button>
+    <div class="lg-bg-grid" aria-hidden="true"></div>
+    <div class="lg-orb orb-teal" aria-hidden="true"></div>
+    <div class="lg-orb orb-blue" aria-hidden="true"></div>
+
+    <div id="license-gate-box" class="license-gate-box">
+      <div class="lg-scanline" aria-hidden="true"></div>
+
+      <div class="lg-security-pill">
+        <i class="lg-sec-dot"></i>
+        <span>CIFRADO ECDSA P-256 · PROTEGIDO</span>
+      </div>
+
+      <div class="lg-emblem-wrap" aria-hidden="true">
+        <div class="lg-sonar-ring"></div>
+        <div class="lg-sonar-ring delay-2"></div>
+        <div class="license-gate-lock">
+          <svg viewBox="0 0 24 24">
+            <rect x="4" y="11" width="16" height="10" rx="2.5"></rect>
+            <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
+            <circle cx="12" cy="16" r="1.5"></circle>
+          </svg>
+        </div>
+      </div>
+
+      <span class="lg-brand-kicker">INFLITRUS QUANTUM M1</span>
+      <h2 id="license-gate-title">TERMINAL DE ACCESO</h2>
+      <p>Ingresa tu clave criptográfica oficial para sincronizar el flujo de mercado y desbloquear las 21 subestrategias en tiempo real.</p>
+
+      <svg class="lg-wave-divider" viewBox="0 0 300 22" aria-hidden="true">
+        <defs>
+          <linearGradient id="lgWaveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#3FE0C5" stop-opacity="0.1"/>
+            <stop offset="50%" stop-color="#3FE0C5" stop-opacity="1"/>
+            <stop offset="80%" stop-color="#29B6F6" stop-opacity="0.9"/>
+            <stop offset="100%" stop-color="#29B6F6" stop-opacity="0.1"/>
+          </linearGradient>
+        </defs>
+        <path d="M 0 11 L 95 11 L 112 3 L 126 19 L 142 2 L 156 18 L 170 7 L 182 11 L 300 11"/>
+      </svg>
+
+      <div class="lg-input-group">
+        <div class="lg-input-label">
+          <span>CLAVE DE ACTIVACIÓN</span>
+          <span>FORMATO IFX-</span>
+        </div>
+        <input id="license-code-input" class="license-input" type="text" placeholder="Pega tu código IFX-... aquí" autocomplete="off" spellcheck="false">
+      </div>
+
+      <button id="license-activate-btn" class="btn-activate-license" type="button">⚡ Desbloquear Terminal</button>
       <div id="license-feedback-msg" class="license-feedback" aria-live="polite"></div>
+
+      <div class="lg-specs-row" aria-hidden="true">
+        <div class="lg-spec-chip"><b>0ms</b>Latencia Local</div>
+        <div class="lg-spec-chip"><b>21 Motores</b>Quant M1/OTC</div>
+        <div class="lg-spec-chip"><b>ECDSA</b>Anti-Clonación</div>
+      </div>
+
       <div class="license-gate-divider"></div>
-      <button id="license-telegram-btn" class="btn-telegram-sub" type="button">✈️ Solicitar ou Renovar Código no Telegram</button>
+      <button id="license-telegram-btn" class="btn-telegram-sub" type="button">✈️ Solicitar o Renovar Clave en Telegram</button>
     </div>
   </div>
 
@@ -231,13 +342,13 @@
         <svg viewBox="0 0 48 32" aria-hidden="true"><path d="M1 17h8l4-13 6 26 5-20 4 12 4-9 4 4h11"/></svg>
         <span><strong>INFLITRUS</strong><small>SIGNALS</small></span>
       </div>
-      <button id="header-license-badge" class="license-header-badge" type="button" title="Status da sua licença de acesso">🔑 Licença</button>
+      <button id="header-license-badge" class="license-header-badge" type="button" title="Estado de tu licencia de acceso">🔑 Licencia</button>
     </header>
 
-    <div class="multi-window-bar" aria-label="Gravador de voo e janelas" style="flex-wrap:wrap;gap:4px">
+    <div class="multi-window-bar" aria-label="Grabador de vuelo y ventanas" style="flex-wrap:wrap;gap:4px">
       <div style="display:flex;align-items:center;gap:4px">
-        <button id="btn-mark-occurrence" class="multi-btn" type="button" title="Marcar momento de uma anomalia ou bug">📍 Marcar ocorrência</button>
-        <button id="btn-export-flight" class="multi-btn" type="button" title="Exportar bundle de diagnóstico JSON">📥 Exportar diagnóstico</button>
+        <button id="btn-mark-occurrence" class="multi-btn" type="button" title="Marcar momento de una anomalía o evento">📍 Marcar ocurrencia</button>
+        <button id="btn-export-flight" class="multi-btn" type="button" title="Exportar paquete de diagnóstico JSON">📥 Exportar diagnóstico</button>
       </div>
       <div style="display:flex;align-items:center;gap:4px;margin-left:auto">
         <span class="multi-label">MOSAICO:</span>
@@ -439,20 +550,20 @@
       </section>
     </div>
 
-    <!-- ABA 4: TELEGRAM & LICENÇA -->
+    <!-- ABA 4: TELEGRAM & LICENCIA -->
     <div id="view-telegram" class="view-pane" style="display:none;">
-      <section class="telegram-hero-card" aria-label="Comunidade Oficial Telegram">
+      <section class="telegram-hero-card" aria-label="Comunidad Oficial Telegram">
         <span class="telegram-hero-icon">✈️</span>
-        <h3 id="tg-channel-title">COMUNIDADE OFICIAL TELEGRAM</h3>
-        <p id="tg-channel-desc">Acesse análises ao vivo, avisos de mercado, atualizações da extensão e suporte VIP direto no nosso canal oficial do Telegram.</p>
-        <button id="btn-open-telegram" class="btn-telegram-main" type="button">✈️ Entrar no Canal do Telegram</button>
-        <button id="btn-open-telegram-support" class="btn-telegram-sub" type="button">💬 Suporte VIP / Renovar Licença</button>
+        <h3 id="tg-channel-title">COMUNIDAD OFICIAL TELEGRAM</h3>
+        <p id="tg-channel-desc">Accede a análisis en vivo, alertas de mercado, actualizaciones del motor cuántico y soporte VIP directo en nuestro canal oficial de Telegram.</p>
+        <button id="btn-open-telegram" class="btn-telegram-main" type="button">✈️ Unirse al Canal Oficial de Telegram</button>
+        <button id="btn-open-telegram-support" class="btn-telegram-sub" type="button">💬 Soporte VIP / Renovar Licencia</button>
       </section>
 
-      <section id="license-info-card" class="license-card" aria-label="Status da Licença">
+      <section id="license-info-card" class="license-card" aria-label="Estado de la Licencia">
         <div class="quant-card-header">
-          <strong>SUA LICENÇA DE ACESSO</strong>
-          <span id="lic-status-tag" class="regime-tag highlight">ATIVA</span>
+          <strong>TU LICENCIA DE ACCESO</strong>
+          <span id="lic-status-tag" class="regime-tag highlight">ACTIVA</span>
         </div>
         <div class="license-grid">
           <div class="license-item">
@@ -460,19 +571,19 @@
             <strong id="lic-holder">---</strong>
           </div>
           <div class="license-item">
-            <label>PLANO</label>
+            <label>PLAN ACTIVO</label>
             <strong id="lic-plan" class="highlight">---</strong>
           </div>
           <div class="license-item">
-            <label>TEMPO RESTANTE</label>
+            <label>TIEMPO RESTANTE</label>
             <strong id="lic-remaining">---</strong>
           </div>
           <div class="license-item">
-            <label>VÁLIDA ATÉ</label>
+            <label>VÁLIDA HASTA</label>
             <strong id="lic-expires">---</strong>
           </div>
         </div>
-        <button id="btn-logout-license" class="btn-logout-license" type="button">🔑 Trocar / Desconectar Código de Licença</button>
+        <button id="btn-logout-license" class="btn-logout-license" type="button">🔑 Cambiar / Desconectar Clave de Licencia</button>
       </section>
     </div>
 
