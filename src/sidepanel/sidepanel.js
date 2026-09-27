@@ -9,6 +9,7 @@ import { soundsForTransition } from "../ui/sound-transitions.js";
 import { formatLifecycleCard } from "../ui/lifecycle-card.js";
 import { rec, configureFlightRecorder, generateUUID } from "../diagnostics/flight-recorder.js";
 import { signalStore } from "../storage/signal-store.js";
+import { licenseManager, TELEGRAM_CONFIG } from "../security/license-manager.js";
 
 const panelInstanceId = generateUUID();
 configureFlightRecorder({
@@ -24,7 +25,7 @@ let boundTabId = null;
 let boundWindowId = null;
 let currentWindowLabel = "Ventana 1";
 let isBoundTabB2 = false;
-let activeMainTab = "signal"; // 'signal' | 'quant' | 'logs'
+let activeMainTab = "signal"; // 'signal' | 'quant' | 'logs' | 'telegram'
 let activeSignalData = null;
 let lastLifecycle = null;
 let lastRenderedSeq = null;
@@ -32,6 +33,68 @@ let lastRenderedSignalSeq = 0;
 let latestRenderedState = null;
 let latestFormattedCardData = null;
 const playedSoundSet = new Set();
+
+function openTelegramUrl(url = TELEGRAM_CONFIG.CHANNEL_URL) {
+  const targetUrl = url || TELEGRAM_CONFIG.CHANNEL_URL;
+  if (typeof chrome !== "undefined" && chrome.tabs?.create) {
+    chrome.tabs.create({ url: targetUrl });
+  } else if (typeof window !== "undefined" && window.open) {
+    window.open(targetUrl, "_blank", "noopener");
+  }
+}
+
+function renderLicenseUI(snapshot = null) {
+  const snap = snapshot || licenseManager.getSnapshot();
+  const isAuthorized = licenseManager.isAuthorizedSync();
+
+  const overlay = document.getElementById("license-gate-overlay");
+  if (overlay) {
+    overlay.classList.toggle("is-visible", !isAuthorized);
+  }
+
+  const headerBadge = document.getElementById("header-license-badge");
+  if (headerBadge) {
+    if (isAuthorized && snap?.payload) {
+      headerBadge.classList.remove("is-locked");
+      headerBadge.textContent = `🔑 ${snap.payload.plan || "PRO"} · ${snap.remainingLabel || "Ativa"}`;
+    } else if (!isAuthorized) {
+      headerBadge.classList.add("is-locked");
+      headerBadge.textContent = "🔒 Bloqueado";
+    } else {
+      headerBadge.classList.remove("is-locked");
+      headerBadge.textContent = "🔑 Licença";
+    }
+  }
+
+  const holderEl = document.getElementById("lic-holder");
+  const planEl = document.getElementById("lic-plan");
+  const remEl = document.getElementById("lic-remaining");
+  const expEl = document.getElementById("lic-expires");
+  const statusTagEl = document.getElementById("lic-status-tag");
+
+  if (snap?.valid && snap?.payload) {
+    if (holderEl) holderEl.textContent = snap.payload.sub || "Cliente VIP";
+    if (planEl) planEl.textContent = snap.payload.plan || "PRO";
+    if (remEl) remEl.textContent = snap.remainingLabel || "Ativa";
+    if (expEl) {
+      const expDate = new Date(snap.payload.exp);
+      expEl.textContent = snap.remainingDays >= 3650 ? "Vitalícia" : expDate.toLocaleDateString("pt-BR");
+    }
+    if (statusTagEl) {
+      statusTagEl.textContent = "ATIVA";
+      statusTagEl.classList.add("highlight");
+    }
+  } else {
+    if (holderEl) holderEl.textContent = "Não ativada";
+    if (planEl) planEl.textContent = "---";
+    if (remEl) remEl.textContent = "0m";
+    if (expEl) expEl.textContent = "---";
+    if (statusTagEl) {
+      statusTagEl.textContent = "BLOQUEADA";
+      statusTagEl.classList.remove("highlight");
+    }
+  }
+}
 
 function sendToBoundTab(message) {
   if (boundTabId == null) return;
@@ -62,11 +125,11 @@ async function updateWindowLabel() {
 }
 
 /**
- * Alterna as abas principais do Side Panel: [Sinal] | [Análise Quant] | [Logs]
+ * Alterna as abas principais do Side Panel: [Sinal] | [Análise Quant] | [Logs] | [Telegram]
  */
 function switchMainTab(tabName) {
   activeMainTab = tabName;
-  const tabs = ["signal", "quant", "logs"];
+  const tabs = ["signal", "quant", "logs", "telegram"];
   tabs.forEach((t) => {
     const btn = document.getElementById(`tab-btn-${t}`);
     const pane = document.getElementById(`view-${t}`);
@@ -1221,12 +1284,85 @@ async function initSidepanel() {
     }
   });
 
+  await licenseManager.refreshFromStorage().catch(() => {});
+  renderLicenseUI();
+  licenseManager.subscribe((snap) => {
+    renderLicenseUI(snap);
+  });
+
+  setInterval(() => {
+    renderLicenseUI();
+  }, 15000);
+
   await refreshWindowState();
 
   // 4. Listeners das Abas Principais
   document.getElementById("tab-btn-signal")?.addEventListener("click", () => switchMainTab("signal"));
   document.getElementById("tab-btn-quant")?.addEventListener("click", () => switchMainTab("quant"));
   document.getElementById("tab-btn-logs")?.addEventListener("click", () => switchMainTab("logs"));
+  document.getElementById("tab-btn-telegram")?.addEventListener("click", () => switchMainTab("telegram"));
+  document.getElementById("header-license-badge")?.addEventListener("click", () => switchMainTab("telegram"));
+
+  // 4.1 Listeners de Licença e Telegram
+  document.getElementById("btn-open-telegram")?.addEventListener("click", () => openTelegramUrl(TELEGRAM_CONFIG.CHANNEL_URL));
+  document.getElementById("btn-open-telegram-support")?.addEventListener("click", () => openTelegramUrl(TELEGRAM_CONFIG.SUPPORT_URL));
+  document.getElementById("license-telegram-btn")?.addEventListener("click", () => openTelegramUrl(TELEGRAM_CONFIG.SUPPORT_URL));
+
+  const handleActivateLicense = async () => {
+    const inputEl = document.getElementById("license-code-input");
+    const feedbackEl = document.getElementById("license-feedback-msg");
+    const btnEl = document.getElementById("license-activate-btn");
+    const rawCode = inputEl?.value?.trim() || "";
+
+    if (!rawCode) {
+      if (feedbackEl) {
+        feedbackEl.classList.remove("is-ok");
+        feedbackEl.textContent = "⚠️ Cole seu código de licença (IFX-...) para continuar.";
+      }
+      return;
+    }
+
+    if (btnEl) btnEl.textContent = "⏳ Validando assinatura...";
+    const res = await licenseManager.activateCode(rawCode);
+    if (btnEl) btnEl.textContent = "🔓 Ativar Licença Agora";
+
+    if (res.valid) {
+      if (feedbackEl) {
+        feedbackEl.classList.add("is-ok");
+        feedbackEl.textContent = `✅ Licença ${res.payload?.plan || "PRO"} ativada com sucesso!`;
+      }
+      if (inputEl) inputEl.value = "";
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        chrome.runtime.sendMessage({ type: "ORACLE_ACTIVATE_LICENSE", code: rawCode }).catch(() => {});
+      }
+      sendToBoundTab({ type: "ORACLE_LICENSE_UPDATED" });
+      renderLicenseUI(res);
+      refreshWindowState();
+    } else {
+      if (feedbackEl) {
+        feedbackEl.classList.remove("is-ok");
+        feedbackEl.textContent = `❌ ${res.message || "Código inválido ou expirado."}`;
+      }
+      renderLicenseUI(res);
+    }
+  };
+
+  document.getElementById("license-activate-btn")?.addEventListener("click", handleActivateLicense);
+  document.getElementById("license-code-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleActivateLicense();
+    }
+  });
+
+  document.getElementById("btn-logout-license")?.addEventListener("click", async () => {
+    await licenseManager.clearLicense();
+    if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({ type: "ORACLE_LOGOUT_LICENSE" }).catch(() => {});
+    }
+    sendToBoundTab({ type: "ORACLE_LICENSE_UPDATED" });
+    renderLicenseUI();
+  });
 
   // 5. Switches e Ações
   document.getElementById("sound-toggle")?.addEventListener("change", (event) => {

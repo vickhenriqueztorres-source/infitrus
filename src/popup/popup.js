@@ -1,6 +1,7 @@
 import { createViewModel } from "../ui/view-model.js";
 import { WaveRenderer } from "../ui/wave.js";
 import { selectTabView } from "../ui/tab-view-selector.js";
+import { TELEGRAM_CONFIG } from "../security/license-manager.js";
 
 const ACTIVE_KEY = "ifx_active_v1";
 const NOTIFICATIONS_KEY = "ifx_notifications_v1";
@@ -140,6 +141,16 @@ async function initialize() {
       else chrome.tabs.create({ url: "https://traderoom.b2trading.io/" });
       window.close();
     });
+  });
+
+  document.getElementById("popup-open-telegram")?.addEventListener("click", () => {
+    const url = TELEGRAM_CONFIG.CHANNEL_URL;
+    if (typeof chrome !== "undefined" && chrome.tabs?.create) {
+      chrome.tabs.create({ url });
+    } else if (typeof window !== "undefined" && window.open) {
+      window.open(url, "_blank", "noopener");
+    }
+    window.close();
   });
 
   if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {

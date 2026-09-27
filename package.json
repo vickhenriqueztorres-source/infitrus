@@ -4,7 +4,9 @@
   "description": "Extensión Chrome de análisis técnico local para B2Trading.",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/**/*.test.js"
+    "test": "node --test tests/**/*.test.js",
+    "gerar-licenca": "node tools/gerar-licenca.js",
+    "empacotar-cliente": "node tools/empacotar-cliente.js"
   },
   "keywords": [
     "b2trading",

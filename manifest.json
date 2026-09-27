@@ -69,16 +69,12 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "src/*",
-        "src/background/*",
         "src/content/*",
         "src/diagnostics/*",
         "src/indicators/*",
         "src/main/*",
         "src/market/*",
-        "src/offscreen/*",
-        "src/popup/*",
-        "src/sidepanel/*",
+        "src/security/*",
         "src/storage/*",
         "src/strategy/*",
         "src/strategy/adaptation/*",

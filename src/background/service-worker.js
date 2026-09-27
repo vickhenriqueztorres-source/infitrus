@@ -7,9 +7,11 @@ import {
   swBuildExportBundle,
 } from "../diagnostics/flight-recorder.js";
 import { signalStore, getNextGlobalSeq } from "../storage/signal-store.js";
+import { licenseManager } from "../security/license-manager.js";
 
 configureFlightRecorder({ ctx: "sw" });
 swRestoreState().catch(() => {});
+licenseManager.refreshFromStorage().catch(() => {});
 rec("SW_BOOT", { motivo: "sw_evaluation_or_wake_up", time: Date.now() });
 
 export async function flushPendingSignals() {
@@ -126,9 +128,7 @@ if (typeof chrome !== "undefined" && chrome.runtime?.onInstalled) {
     setupOffscreenDocument().catch(() => {});
     flushPendingSignals().catch(() => {});
     migrateLegacyStateKeys().catch(() => {});
-    try {
-      chrome.storage.local.clear().catch(() => {});
-    } catch (_) {}
+    licenseManager.refreshFromStorage().catch(() => {});
   });
 }
 
@@ -512,6 +512,51 @@ export function handleServiceWorkerMessage(message, sender, sendResponse) {
       sendResponse({ success: true });
     }).catch((err) => {
       sendResponse({ success: false, error: err.message });
+    });
+    return true;
+  }
+
+  if (message?.type === "ORACLE_VERIFY_LICENSE") {
+    licenseManager.refreshFromStorage().then((res) => {
+      sendResponse({ ok: true, license: res });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: err?.message || String(err) });
+    });
+    return true;
+  }
+
+  if (message?.type === "ORACLE_ACTIVATE_LICENSE") {
+    licenseManager.activateCode(message.code || "").then((res) => {
+      if (typeof chrome !== "undefined" && chrome.tabs?.query) {
+        chrome.tabs.query({}).then((tabs) => {
+          for (const t of tabs) {
+            if (t.id) {
+              chrome.tabs.sendMessage(t.id, { type: "ORACLE_LICENSE_UPDATED" }).catch(() => {});
+            }
+          }
+        }).catch(() => {});
+      }
+      sendResponse({ ok: res.valid, license: res });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: err?.message || String(err) });
+    });
+    return true;
+  }
+
+  if (message?.type === "ORACLE_LOGOUT_LICENSE") {
+    licenseManager.clearLicense().then(() => {
+      if (typeof chrome !== "undefined" && chrome.tabs?.query) {
+        chrome.tabs.query({}).then((tabs) => {
+          for (const t of tabs) {
+            if (t.id) {
+              chrome.tabs.sendMessage(t.id, { type: "ORACLE_LICENSE_UPDATED" }).catch(() => {});
+            }
+          }
+        }).catch(() => {});
+      }
+      sendResponse({ ok: true, license: licenseManager.getSnapshot() });
+    }).catch((err) => {
+      sendResponse({ ok: false, error: err?.message || String(err) });
     });
     return true;
   }

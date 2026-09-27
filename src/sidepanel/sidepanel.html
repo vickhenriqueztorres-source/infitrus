@@ -169,15 +169,69 @@
 
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
     .is-pulsing{animation:pulse .8s infinite}
+
+    /* Header License Badge */
+    header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+    .license-header-badge{padding:3px 8px;border-radius:999px;font-size:9px;font-weight:700;letter-spacing:.04em;cursor:pointer;border:1px solid rgba(63,224,197,.4);background:rgba(63,224,197,.12);color:#3FE0C5;transition:all .15s;white-space:nowrap}
+    .license-header-badge:hover{background:rgba(63,224,197,.22)}
+    .license-header-badge.is-locked{border-color:rgba(255,90,110,.5);background:rgba(255,90,110,.15);color:#FF5A6E}
+
+    /* Aba Telegram & Licença */
+    .telegram-hero-card{margin-top:8px;padding:14px 12px;border-radius:12px;border:1px solid rgba(41,182,246,.45);background:linear-gradient(165deg,rgba(41,182,246,.16) 0%,rgba(11,26,31,.96) 100%);text-align:center;box-shadow:0 6px 20px rgba(0,0,0,.3)}
+    .telegram-hero-icon{font-size:28px;line-height:1;margin-bottom:6px;display:block}
+    .telegram-hero-card h3{margin:0 0 4px;font-size:13px;font-weight:800;color:#FFFFFF;letter-spacing:.03em}
+    .telegram-hero-card p{margin:0 0 12px;font-size:9.5px;color:var(--ice,#E6EEF0);line-height:1.45;opacity:.9}
+    .btn-telegram-main{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:10px 12px;border-radius:8px;border:none;background:linear-gradient(135deg,#29B6F6 0%,#0288D1 100%);color:#FFFFFF;font-family:inherit;font-size:11px;font-weight:800;letter-spacing:.04em;cursor:pointer;text-decoration:none;box-shadow:0 4px 14px rgba(41,182,246,.35);transition:transform .15s,box-shadow .15s}
+    .btn-telegram-main:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(41,182,246,.5)}
+    .btn-telegram-sub{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:7px;padding:8px 10px;border-radius:8px;border:1px solid rgba(41,182,246,.4);background:rgba(41,182,246,.1);color:#29B6F6;font-family:inherit;font-size:10px;font-weight:700;cursor:pointer;text-decoration:none;transition:all .15s}
+    .btn-telegram-sub:hover{background:rgba(41,182,246,.2);color:#fff}
+
+    .license-card{margin-top:10px;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--surface)}
+    .license-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+    .license-item{padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.25);border:1px solid var(--border)}
+    .license-item label{display:block;font-size:8px;color:var(--steel);margin-bottom:2px}
+    .license-item strong{font-size:10.5px;color:var(--ice);display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .btn-logout-license{width:100%;margin-top:10px;padding:8px 10px;border-radius:7px;border:1px solid rgba(255,90,110,.4);background:rgba(255,90,110,.1);color:#FF5A6E;font-family:inherit;font-size:9.5px;font-weight:700;cursor:pointer;transition:all .15s}
+    .btn-logout-license:hover{background:rgba(255,90,110,.22)}
+
+    /* Painel de Login / Ativação por Código (Bloqueio Total) */
+    .license-gate-overlay{position:fixed;inset:0;z-index:9999;background:radial-gradient(circle at top,#10262E 0%,#071216 75%);display:none;flex-direction:column;justify-content:center;align-items:center;padding:18px;box-sizing:border-box}
+    .license-gate-overlay.is-visible{display:flex}
+    .license-gate-box{width:100%;max-width:360px;background:rgba(14,31,38,.96);border:1px solid rgba(63,224,197,.35);border-radius:14px;padding:20px 16px;box-shadow:0 18px 45px rgba(0,0,0,.75);text-align:center}
+    .license-gate-lock{width:46px;height:46px;margin:0 auto 10px;border-radius:50%;background:rgba(63,224,197,.14);border:1px solid rgba(63,224,197,.45);display:flex;align-items:center;justify-content:center;font-size:22px}
+    .license-gate-box h2{margin:0 0 5px;font-size:15px;font-weight:900;color:#FFFFFF;letter-spacing:.04em}
+    .license-gate-box p{margin:0 0 14px;font-size:10px;color:var(--steel,#8A9BA3);line-height:1.45}
+    .license-input{width:100%;box-sizing:border-box;padding:11px 10px;border-radius:8px;border:1px solid var(--border,#8A9BA344);background:#071115;color:#3FE0C5;font-family:'JetBrains Mono',monospace;font-size:10.5px;outline:none;margin-bottom:8px;text-align:center}
+    .license-input:focus{border-color:#3FE0C5;box-shadow:0 0 10px rgba(63,224,197,.22)}
+    .btn-activate-license{width:100%;padding:11px;border-radius:8px;border:none;background:linear-gradient(135deg,#3FE0C5 0%,#14B8A6 100%);color:#061519;font-family:inherit;font-size:11.5px;font-weight:900;letter-spacing:.05em;text-transform:uppercase;cursor:pointer;box-shadow:0 6px 18px rgba(63,224,197,.28);transition:all .15s}
+    .btn-activate-license:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(63,224,197,.4)}
+    .license-feedback{min-height:16px;margin:8px 0 6px;font-size:9.5px;font-weight:600;color:#FF5A6E}
+    .license-feedback.is-ok{color:#3FE0C5}
+    .license-gate-divider{height:1px;background:var(--border,#8A9BA322);margin:12px 0}
   </style>
 </head>
 <body>
+  <!-- PAINEL DE LOGIN / ATIVAÇÃO DE LICENÇA -->
+  <div id="license-gate-overlay" class="license-gate-overlay" role="dialog" aria-modal="true" aria-labelledby="license-gate-title">
+    <div class="license-gate-box">
+      <div class="license-gate-lock">🔐</div>
+      <h2 id="license-gate-title">ACESSO EXCLUSIVO</h2>
+      <p>Insira seu código de licença oficial para desbloquear o motor quantitativo M1 e os sinais em tempo real.</p>
+      <input id="license-code-input" class="license-input" type="text" placeholder="Cole seu código IFX-... aqui" autocomplete="off" spellcheck="false">
+      <button id="license-activate-btn" class="btn-activate-license" type="button">🔓 Ativar Licença Agora</button>
+      <div id="license-feedback-msg" class="license-feedback" aria-live="polite"></div>
+      <div class="license-gate-divider"></div>
+      <button id="license-telegram-btn" class="btn-telegram-sub" type="button">✈️ Solicitar ou Renovar Código no Telegram</button>
+    </div>
+  </div>
+
   <main class="popup-shell">
     <header>
       <div class="popup-brand" aria-label="Inflitrus Signals">
         <svg viewBox="0 0 48 32" aria-hidden="true"><path d="M1 17h8l4-13 6 26 5-20 4 12 4-9 4 4h11"/></svg>
         <span><strong>INFLITRUS</strong><small>SIGNALS</small></span>
       </div>
+      <button id="header-license-badge" class="license-header-badge" type="button" title="Status da sua licença de acesso">🔑 Licença</button>
     </header>
 
     <div class="multi-window-bar" aria-label="Gravador de voo e janelas" style="flex-wrap:wrap;gap:4px">
@@ -195,8 +249,9 @@
     <!-- Navegação de Abas Principais -->
     <nav class="view-nav-tabs" aria-label="Pestañas de visualización">
       <button id="tab-btn-signal" class="view-tab-btn is-active" type="button">⚡ Señal</button>
-      <button id="tab-btn-quant" class="view-tab-btn" type="button">📊 Análisis Quant</button>
-      <button id="tab-btn-logs" class="view-tab-btn" type="button">📋 Logs / Sistema</button>
+      <button id="tab-btn-quant" class="view-tab-btn" type="button">📊 Quant</button>
+      <button id="tab-btn-logs" class="view-tab-btn" type="button">📋 Logs</button>
+      <button id="tab-btn-telegram" class="view-tab-btn" type="button">✈️ Telegram</button>
     </nav>
 
     <!-- ABA 1: SINAL & MONITOR DE MERCADO -->
@@ -381,6 +436,43 @@
         <div id="logs-list" class="logs-list" role="log" aria-live="polite">
           <p class="logs-empty">Esperando eventos del sistema…</p>
         </div>
+      </section>
+    </div>
+
+    <!-- ABA 4: TELEGRAM & LICENÇA -->
+    <div id="view-telegram" class="view-pane" style="display:none;">
+      <section class="telegram-hero-card" aria-label="Comunidade Oficial Telegram">
+        <span class="telegram-hero-icon">✈️</span>
+        <h3 id="tg-channel-title">COMUNIDADE OFICIAL TELEGRAM</h3>
+        <p id="tg-channel-desc">Acesse análises ao vivo, avisos de mercado, atualizações da extensão e suporte VIP direto no nosso canal oficial do Telegram.</p>
+        <button id="btn-open-telegram" class="btn-telegram-main" type="button">✈️ Entrar no Canal do Telegram</button>
+        <button id="btn-open-telegram-support" class="btn-telegram-sub" type="button">💬 Suporte VIP / Renovar Licença</button>
+      </section>
+
+      <section id="license-info-card" class="license-card" aria-label="Status da Licença">
+        <div class="quant-card-header">
+          <strong>SUA LICENÇA DE ACESSO</strong>
+          <span id="lic-status-tag" class="regime-tag highlight">ATIVA</span>
+        </div>
+        <div class="license-grid">
+          <div class="license-item">
+            <label>CLIENTE / TITULAR</label>
+            <strong id="lic-holder">---</strong>
+          </div>
+          <div class="license-item">
+            <label>PLANO</label>
+            <strong id="lic-plan" class="highlight">---</strong>
+          </div>
+          <div class="license-item">
+            <label>TEMPO RESTANTE</label>
+            <strong id="lic-remaining">---</strong>
+          </div>
+          <div class="license-item">
+            <label>VÁLIDA ATÉ</label>
+            <strong id="lic-expires">---</strong>
+          </div>
+        </div>
+        <button id="btn-logout-license" class="btn-logout-license" type="button">🔑 Trocar / Desconectar Código de Licença</button>
       </section>
     </div>
 

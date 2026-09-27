@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gerador de Licenças Oficial — Império FX</title>
+  <style>
+    :root {
+      --bg-dark: #06090f;
+      --bg-card: #0e1420;
+      --bg-input: #090d16;
+      --border: rgba(255, 255, 255, 0.09);
+      --gold: #f5b942;
+      --emerald: #00e676;
+      --blue: #29b6f6;
+      --red: #ff5252;
+      --text: #f3f6fa;
+      --muted: #8b9bb4;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top, #121c2d 0%, var(--bg-dark) 70%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 32px 16px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .container {
+      width: 100%;
+      max-width: 760px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 18px;
+      margin-bottom: 24px;
+    }
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .brand h1 {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      color: #fff;
+    }
+    .brand h1 span {
+      color: var(--emerald);
+    }
+    .brand p {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .badge-admin {
+      background: rgba(245, 185, 66, 0.14);
+      color: var(--gold);
+      border: 1px solid rgba(245, 185, 66, 0.35);
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+    .warning-banner {
+      background: rgba(255, 82, 82, 0.08);
+      border: 1px solid rgba(255, 82, 82, 0.25);
+      color: #ffadb5;
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 12px;
+      margin-bottom: 22px;
+      line-height: 1.45;
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    @media (max-width: 600px) {
+      .form-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .field label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: var(--muted);
+    }
+    .field input, .field select {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 12px 14px;
+      border-radius: 10px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .field input:focus, .field select:focus {
+      border-color: var(--emerald);
+    }
+    .presets-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: var(--muted);
+      margin-bottom: 8px;
+      display: block;
+    }
+    .presets-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(105px, 1fr));
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+    .preset-btn {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 8px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+    }
+    .preset-btn:hover {
+      background: rgba(0, 230, 118, 0.1);
+      border-color: rgba(0, 230, 118, 0.4);
+    }
+    .preset-btn.active {
+      background: rgba(0, 230, 118, 0.18);
+      border-color: var(--emerald);
+      color: var(--emerald);
+      font-weight: 700;
+    }
+    .btn-generate {
+      width: 100%;
+      background: linear-gradient(135deg, #00e676 0%, #00b862 100%);
+      color: #04120a;
+      border: none;
+      padding: 14px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(0, 230, 118, 0.25);
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .btn-generate:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 12px 28px rgba(0, 230, 118, 0.35);
+    }
+    .result-box {
+      margin-top: 24px;
+      background: #080c14;
+      border: 1px solid rgba(0, 230, 118, 0.35);
+      border-radius: 12px;
+      padding: 18px;
+      display: none;
+    }
+    .result-box.visible {
+      display: block;
+    }
+    .result-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .result-meta strong {
+      color: var(--text);
+    }
+    .code-output {
+      width: 100%;
+      background: #04070c;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12px;
+      color: var(--emerald);
+      word-break: break-all;
+      line-height: 1.45;
+      margin-bottom: 12px;
+      user-select: all;
+    }
+    .action-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .btn-copy {
+      flex: 1;
+      background: rgba(0, 230, 118, 0.14);
+      border: 1px solid rgba(0, 230, 118, 0.4);
+      color: var(--emerald);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-copy-msg {
+      flex: 1;
+      background: rgba(41, 182, 246, 0.14);
+      border: 1px solid rgba(41, 182, 246, 0.4);
+      color: var(--blue);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .history-section {
+      margin-top: 28px;
+      border-top: 1px solid var(--border);
+      padding-top: 20px;
+    }
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .history-header h3 {
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+      color: var(--muted);
+    }
+    .btn-clear-history {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .history-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      gap: 10px;
+    }
+    .history-item-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .history-item-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="brand">
+        <h1>IMPÉRIO <span>FX</span> — GERADOR DE LICENÇAS</h1>
+        <p>Painel Administrativo Criptográfico (ECDSA P-256) • Uso Exclusivo</p>
+      </div>
+      <span class="badge-admin">🔐 Chave Mestra Local</span>
+    </div>
+
+    <div class="warning-banner">
+      ⚠️ <strong>ATENÇÃO (USO EXCLUSIVO):</strong> Este arquivo contém sua chave mestra de assinatura. Mantenha-o apenas no seu computador. Nunca envie a pasta <code>tools/</code> para os clientes.
+    </div>
+
+    <div class="form-grid">
+      <div class="field">
+        <label for="holder-input">Nome ou WhatsApp/Telegram do Cliente</label>
+        <input type="text" id="holder-input" placeholder="Ex: João Silva (@joaosilva)" value="Cliente VIP">
+      </div>
+      <div class="field">
+        <label for="days-input">Validade em Dias (ou use os botões abaixo)</label>
+        <input type="number" id="days-input" min="0.04" max="36500" step="any" value="30">
+      </div>
+    </div>
+
+    <span class="presets-label">Atalhos Rápidos de Validade</span>
+    <div class="presets-row">
+      <button type="button" class="preset-btn" data-days="1" data-plan="TRIAL">🧪 1 Dia (Teste)</button>
+      <button type="button" class="preset-btn" data-days="3" data-plan="TRIAL-3D">⚡ 3 Dias</button>
+      <button type="button" class="preset-btn" data-days="7" data-plan="SEMANAL">📅 7 Dias</button>
+      <button type="button" class="preset-btn" data-days="15" data-plan="QUINZENAL">📆 15 Dias</button>
+      <button type="button" class="preset-btn active" data-days="30" data-plan="MENSAL">🔥 30 Dias (Mensal)</button>
+      <button type="button" class="preset-btn" data-days="90" data-plan="TRIMESTRAL">💎 90 Dias</button>
+      <button type="button" class="preset-btn" data-days="365" data-plan="ANUAL">👑 1 Ano</button>
+      <button type="button" class="preset-btn" data-days="3650" data-plan="VITALICIO">♾️ Vitalício</button>
+    </div>
+
+    <button type="button" class="btn-generate" id="btn-generate">Gerar Código de Licença Agora</button>
+
+    <div class="result-box" id="result-box">
+      <div class="result-meta" id="result-meta"></div>
+      <div class="code-output" id="code-output"></div>
+      <div class="action-row">
+        <button type="button" class="btn-copy" id="btn-copy-code">📋 Copiar Apenas o Código</button>
+        <button type="button" class="btn-copy-msg" id="btn-copy-msg">💬 Copiar Mensagem Pronta p/ Cliente</button>
+      </div>
+    </div>
+
+    <div class="history-section">
+      <div class="history-header">
+        <h3>Últimas Licenças Geradas Neste Computador</h3>
+        <button type="button" class="btn-clear-history" id="btn-clear-history">Limpar histórico</button>
+      </div>
+      <div class="history-list" id="history-list"></div>
+    </div>
+  </div>
+
+  <script>
+    const PRIVATE_KEY_JWK = {
+      key_ops: ['sign'],
+      ext: true,
+      kty: 'EC',
+      x: '5GwRbpIj6fDE9wFoqzs8gWwc59aysCra8phIQklqkoc',
+      y: 'WyzYGO10QITLCm5_zfcyrn3pWBYgqRDZ_VvOokredpE',
+      crv: 'P-256',
+      d: 'FJgJ917Oj5v6ddeFb85kLo1-O-Vbe1JsW5-2GxyP4SU'
+    };
+
+    let selectedPlan = 'MENSAL';
+    let lastGenerated = null;
+
+    function bytesToBase64Url(bytes) {
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    async function generateLicense(holder, durationDays, plan) {
+      const nowMs = Date.now();
+      const expMs = Math.floor(nowMs + durationDays * 86400000);
+      const id = 'LIC-' + Math.random().toString(36).substring(2, 7).toUpperCase();
+      const payloadObj = {
+        v: 1,
+        id,
+        sub: holder || 'Cliente VIP',
+        plan: plan || 'PRO',
+        iat: nowMs,
+        exp: expMs
+      };
+      const payloadB64 = bytesToBase64Url(new TextEncoder().encode(JSON.stringify(payloadObj)));
+      const privateKey = await window.crypto.subtle.importKey(
+        'jwk',
+        PRIVATE_KEY_JWK,
+        { name: 'ECDSA', namedCurve: 'P-256' },
+        false,
+        ['sign']
+      );
+      const sigBuffer = await window.crypto.subtle.sign(
+        { name: 'ECDSA', hash: { name: 'SHA-256' } },
+        privateKey,
+        new TextEncoder().encode(payloadB64)
+      );
+      const sigB64 = bytesToBase64Url(new Uint8Array(sigBuffer));
+      return {
+        code: `IFX-${payloadB64}.${sigB64}`,
+        payload: payloadObj,
+        durationDays
+      };
+    }
+
+    const presetButtons = document.querySelectorAll('.preset-btn');
+    const daysInput = document.getElementById('days-input');
+    const holderInput = document.getElementById('holder-input');
+
+    presetButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        presetButtons.forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        daysInput.value = btn.dataset.days;
+        selectedPlan = btn.dataset.plan || 'PRO';
+      });
+    });
+
+    daysInput.addEventListener('input', () => {
+      const val = Number(daysInput.value);
+      if (val <= 1) selectedPlan = 'TRIAL';
+      else if (val <= 7) selectedPlan = 'SEMANAL';
+      else if (val <= 31) selectedPlan = 'MENSAL';
+      else if (val >= 3650) selectedPlan = 'VITALICIO';
+      else selectedPlan = 'PRO';
+    });
+
+    function loadHistory() {
+      try {
+        return JSON.parse(localStorage.getItem('ifx_admin_license_history') || '[]');
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function saveToHistory(entry) {
+      const list = loadHistory();
+      list.unshift(entry);
+      localStorage.setItem('ifx_admin_license_history', JSON.stringify(list.slice(0, 30)));
+      renderHistory();
+    }
+
+    function renderHistory() {
+      const listEl = document.getElementById('history-list');
+      const items = loadHistory();
+      if (!items.length) {
+        listEl.innerHTML = '<div style="color:#8b9bb4;font-size:12px;">Nenhuma licença gerada ainda.</div>';
+        return;
+      }
+      listEl.innerHTML = '';
+      items.forEach((item) => {
+        const row = document.createElement('div');
+        row.className = 'history-item';
+        const expStr = new Date(item.payload.exp).toLocaleDateString('pt-BR');
+        row.innerHTML = `
+          <div class="history-item-info">
+            <strong>${item.payload.sub} • <span style="color:#00e676">${item.payload.plan}</span> (${item.durationDays}d)</strong>
+            <span style="color:#8b9bb4">ID: ${item.payload.id} • Expira em ${expStr}</span>
+          </div>
+          <button type="button" class="history-item-btn">Copiar Código</button>
+        `;
+        row.querySelector('button').addEventListener('click', (e) => {
+          navigator.clipboard.writeText(item.code);
+          e.target.textContent = '✅ Copiado!';
+          setTimeout(() => { e.target.textContent = 'Copiar Código'; }, 1500);
+        });
+        listEl.appendChild(row);
+      });
+    }
+
+    document.getElementById('btn-generate').addEventListener('click', async () => {
+      const holder = holderInput.value.trim() || 'Cliente VIP';
+      const days = Math.max(0.01, Number(daysInput.value) || 30);
+      const res = await generateLicense(holder, days, selectedPlan);
+      lastGenerated = res;
+
+      const expFormatted = new Date(res.payload.exp).toLocaleString('pt-BR');
+      document.getElementById('result-meta').innerHTML = `
+        <span>👤 Cliente: <strong>${res.payload.sub}</strong></span>
+        <span>🏷️ Plano: <strong>${res.payload.plan} (${days} dias)</strong></span>
+        <span>📅 Expira em: <strong>${expFormatted}</strong></span>
+      `;
+      document.getElementById('code-output').textContent = res.code;
+      document.getElementById('result-box').classList.add('visible');
+      saveToHistory(res);
+    });
+
+    document.getElementById('btn-copy-code').addEventListener('click', (e) => {
+      if (!lastGenerated) return;
+      navigator.clipboard.writeText(lastGenerated.code);
+      const btn = e.currentTarget;
+      const original = btn.textContent;
+      btn.textContent = '✅ Código Copiado!';
+      setTimeout(() => { btn.textContent = original; }, 1800);
+    });
+
+    document.getElementById('btn-copy-msg').addEventListener('click', (e) => {
+      if (!lastGenerated) return;
+      const expDate = new Date(lastGenerated.payload.exp).toLocaleString('pt-BR');
+      const msg = [
+        `🚀 *SUA LICENÇA IMPÉRIO FX ESTÁ ATIVA!*`,
+        ``,
+        `👤 *Cliente:* ${lastGenerated.payload.sub}`,
+        `🏷️ *Plano:* ${lastGenerated.payload.plan} (${lastGenerated.durationDays} dia(s))`,
+        `📅 *Válida até:* ${expDate}`,
+        ``,
+        `🔑 *Seu Código de Ativação:*`,
+        `${lastGenerated.code}`,
+        ``,
+        `📌 *Como ativar:* Abra a extensão Império FX no navegador, cole o código acima no Painel de Login e clique em *Ativar Licença*.`
+      ].join('\n');
+      navigator.clipboard.writeText(msg);
+      const btn = e.currentTarget;
+      const original = btn.textContent;
+      btn.textContent = '✅ Mensagem Copiada!';
+      setTimeout(() => { btn.textContent = original; }, 1800);
+    });
+
+    document.getElementById('btn-clear-history').addEventListener('click', () => {
+      localStorage.removeItem('ifx_admin_license_history');
+      renderHistory();
+    });
+
+    renderHistory();
+  </script>
+</body>
+</html>

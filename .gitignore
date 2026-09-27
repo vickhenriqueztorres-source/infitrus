@@ -22,3 +22,4 @@ Thumbs.db
 # IDE & Editor Settings
 .vscode/
 .idea/
+dist-cliente/

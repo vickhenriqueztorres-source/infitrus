@@ -33,6 +33,7 @@ import { marketClock } from "../utils/market-clock.js";
 import { logger } from "../utils/logger.js";
 import { initBridgeListener } from "./bridge.js";
 import { rec, configureFlightRecorder, generateUUID, hashCandles } from "../diagnostics/flight-recorder.js";
+import { licenseManager } from "../security/license-manager.js";
 
 /**
  * Extrai o símbolo de um payload heterogêneo de forma abrangente.
@@ -275,8 +276,13 @@ export function detectOpenChartCountFromDOM() {
 }
 
 export class MarketAnalyzer {
-  constructor() {
+  constructor(options = {}) {
     this.instanceId = generateUUID();
+    this.licenseManager = options.licenseManager || licenseManager;
+    if (options.enforceLicense !== undefined && this.licenseManager?.setEnforceMode) {
+      this.licenseManager.setEnforceMode(Boolean(options.enforceLicense));
+    }
+    this._unsubLicense = null;
     this.timeframeSeconds = 60; // Padrão M1
     this.currentSymbol = null;
     this.activeSymbols = new Set();
@@ -604,7 +610,25 @@ export class MarketAnalyzer {
     });
   }
 
+  isLicenseAuthorized(nowMs = Date.now()) {
+    if (!this.licenseManager) return true;
+    return this.licenseManager.isAuthorizedSync(nowMs);
+  }
+
   init() {
+    if (this.licenseManager) {
+      if (typeof this.licenseManager.refreshFromStorage === "function") {
+        this.licenseManager.refreshFromStorage().then(() => {
+          if (!this._isDestroyed) this.updatePanelDisplay({ immediate: true });
+        }).catch(() => {});
+      }
+      if (typeof this.licenseManager.subscribe === "function") {
+        this._unsubLicense = this.licenseManager.subscribe(() => {
+          if (!this._isDestroyed) this.updatePanelDisplay({ immediate: true });
+        });
+      }
+    }
+
     // 0. Identifica a aba e janela atuais via Background Service Worker (com retry defensivo)
     const fetchTabInfo = (retry = true) => {
       if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
@@ -764,6 +788,11 @@ export class MarketAnalyzer {
         }
         if (msg && msg.type === "ORACLE_SELECT_SYMBOL" && msg.symbol) {
           this.selectSymbol(msg.symbol);
+        }
+        if (msg && msg.type === "ORACLE_LICENSE_UPDATED" && this.licenseManager) {
+          this.licenseManager.refreshFromStorage().then(() => {
+            if (!this._isDestroyed) this.updatePanelDisplay({ immediate: true });
+          }).catch(() => {});
         }
       });
     }
@@ -1022,6 +1051,10 @@ export class MarketAnalyzer {
       try { this._unsubLifecycle(); } catch (_) {}
       this._unsubLifecycle = null;
     }
+    if (this._unsubLicense) {
+      try { this._unsubLicense(); } catch (_) {}
+      this._unsubLicense = null;
+    }
     if (this._domObserver) {
       try { this._domObserver.disconnect(); } catch (_) {}
       this._domObserver = null;
@@ -1167,6 +1200,19 @@ export class MarketAnalyzer {
     const active = this.activeChannel.get();
     const mainPair = active?.pair || this.currentSymbol;
     const tf = active?.tf || this.timeframeSeconds;
+
+    if (!this.isLicenseAuthorized(currentNowSec * 1000)) {
+      this.decisionsBySymbol.clear();
+      this.lastCachedDecision = null;
+      this.currentLifecycleSnapshot = {
+        status: "LICENSE_LOCKED",
+        pair: mainPair || null,
+        tf,
+        current: null,
+        trade: null,
+      };
+      return this.currentLifecycleSnapshot;
+    }
 
     const symbolsToStep = new Set(this.activeSymbols);
     if (mainPair && !this._unsubscribedPairs.has(mainPair)) {
@@ -1648,6 +1694,10 @@ export class MarketAnalyzer {
         marketClock.observeCandleOpen(candle.timestamp, candle.receivedAt);
       }
 
+      if (this.licenseManager?.observeRealTimeMs && Number.isFinite(candle.timestamp) && candle.timestamp > 1_700_000_000) {
+        this.licenseManager.observeRealTimeMs(candle.timestamp * 1000);
+      }
+
       this.tickLifecycle();
 
       const priceStr = candle.close.toFixed(5);
@@ -1715,6 +1765,17 @@ export class MarketAnalyzer {
 
   async _evaluateOnClosedCandle(pair, tf, closedCandle, newCandle) {
     if (this._isDestroyed) return;
+
+    if (!this.isLicenseAuthorized()) {
+      rec("DECIDE_BLOCKED", {
+        par: pair,
+        ts: closedCandle?.timestamp ?? null,
+        closed: Boolean(closedCandle?.closed),
+        reason: "LICENSE_LOCKED",
+      });
+      this.updatePanelDisplay({ immediate: true });
+      return;
+    }
 
     const qReport = this.quality.getReport(pair, tf);
     const isReady = this.store.isReady(pair, tf);
@@ -2070,6 +2131,8 @@ export class MarketAnalyzer {
 
   buildPanelData() {
     const domSymbol = detectActiveSymbolFromDOM();
+    const isLicensed = this.isLicenseAuthorized();
+    const licenseStatus = this.licenseManager ? this.licenseManager.getSnapshot() : { valid: true };
 
     // Se NÃO há canal ativo no activeChannel:
     if (!this.currentSymbol) {
@@ -2082,11 +2145,12 @@ export class MarketAnalyzer {
         domSymbol,
         action: "WAIT",
         signal: "WAIT",
-        label: "Esperando canal del gráfico…",
-        signalLabel: "Esperando canal del gráfico…",
-        quantLabel: "Esperando canal del gráfico…",
-        status: "WAITING_CHANNEL",
-        state: "WAITING_CHANNEL",
+        label: isLicensed ? "Esperando canal del gráfico…" : "LICENÇA BLOQUEADA",
+        signalLabel: isLicensed ? "Esperando canal del gráfico…" : "LICENÇA BLOQUEADA",
+        quantLabel: isLicensed ? "Esperando canal del gráfico…" : "LICENÇA BLOQUEADA",
+        status: isLicensed ? "WAITING_CHANNEL" : "LICENSE_LOCKED",
+        state: isLicensed ? "WAITING_CHANNEL" : "LICENSE_LOCKED",
+        licenseStatus,
         frameStatus: typeof window !== "undefined" && window !== window.top ? "iframe conectado" : "conectado",
         wsStatus: this.socketStatus,
         lastPrice: "---",
@@ -2195,34 +2259,45 @@ export class MarketAnalyzer {
       const symPrice = this.lastPrices.get(sym) || (sym === this.currentSymbol ? this.lastPrice : "---");
 
       // Sinal visual e fase gerenciados estritamente pelo SignalLifecycle com isolamento total por par
-      const lifecycle = (sym === this.currentSymbol && this.currentLifecycleSnapshot)
-        ? this.currentLifecycleSnapshot
-        : this.lifecycle.snapshot(sym, this.timeframeSeconds, marketClock.nowSec());
-      const isTradeActive = lifecycle.trade && ["ENTRY_NOW", "IN_TRADE"].includes(lifecycle.trade.phase);
-      const isExpiring = lifecycle.trade?.phase === "IN_TRADE" && (lifecycle.trade?.secondsRemaining ?? 60) <= 2;
+      const lifecycle = !isLicensed
+        ? { status: "LICENSE_LOCKED", pair: sym, tf: this.timeframeSeconds, current: null, trade: null }
+        : ((sym === this.currentSymbol && this.currentLifecycleSnapshot)
+          ? this.currentLifecycleSnapshot
+          : this.lifecycle.snapshot(sym, this.timeframeSeconds, marketClock.nowSec()));
+      const isTradeActive = isLicensed && lifecycle.trade && ["ENTRY_NOW", "IN_TRADE"].includes(lifecycle.trade.phase);
+      const isExpiring = isLicensed && lifecycle.trade?.phase === "IN_TRADE" && (lifecycle.trade?.secondsRemaining ?? 60) <= 2;
 
       // PRE_SIGNAL tem prioridade visual máxima para alertar a direção da próxima vela com antecedência
-      const activeItem = (lifecycle.current && lifecycle.current.phase === Phase.PRE_SIGNAL)
-        ? lifecycle.current
-        : (isTradeActive ? lifecycle.trade : null);
+      const activeItem = !isLicensed
+        ? null
+        : ((lifecycle.current && lifecycle.current.phase === Phase.PRE_SIGNAL)
+          ? lifecycle.current
+          : (isTradeActive ? lifecycle.trade : null));
 
-      const displayAction = activeItem?.direction || "WAIT";
-      const displayLabel = activeItem
-        ? (activeItem.phase === Phase.ENTRY_NOW
-            ? "ENTRA AHORA"
-            : activeItem.phase === Phase.IN_TRADE
-              ? (isExpiring ? "EXPIRANDO" : "EN OPERACIÓN")
-              : "PRE-SEÑAL")
-        : "ESCANEANDO";
+      const displayAction = isLicensed ? (activeItem?.direction || "WAIT") : "WAIT";
+      const displayLabel = !isLicensed
+        ? "LICENÇA BLOQUEADA"
+        : (activeItem
+          ? (activeItem.phase === Phase.ENTRY_NOW
+              ? "ENTRA AHORA"
+              : activeItem.phase === Phase.IN_TRADE
+                ? (isExpiring ? "EXPIRANDO" : "EN OPERACIÓN")
+                : "PRE-SEÑAL")
+          : "ESCANEANDO");
 
       // Métricas determinísticas imutáveis de acordo com a fase:
       // Se há um item ativo (trade em curso ou pré-sinal), suas métricas congeladas têm prioridade absoluta
-      const itemEdge = activeItem?.edge ?? (activeItem?.snapshot?.edge ?? qReport.edge);
-      const itemQuality = activeItem?.quality ?? (activeItem?.snapshot?.quality ?? qReport.quality);
-      const itemProb = activeItem?.conservativeProbability ?? activeItem?.probability ?? (activeItem?.snapshot?.conservativeProbability ?? activeItem?.snapshot?.probability ?? (qReport.conservativeProbability ?? qReport.probability));
-      const itemSubStrategy = activeItem?.subStrategy ?? activeItem?.strategyName ?? (activeItem?.snapshot?.subStrategy ?? activeItem?.snapshot?.strategyName ?? qReport.subStrategy);
-      const itemStrategyName = activeItem?.strategyName ?? activeItem?.subStrategy ?? (activeItem?.snapshot?.strategyName ?? activeItem?.snapshot?.subStrategy ?? qReport.strategyName);
-      const itemReasons = (activeItem?.reasons && activeItem.reasons.length > 0) ? activeItem.reasons : ((activeItem?.snapshot?.reasons && activeItem.snapshot.reasons.length > 0) ? activeItem.snapshot.reasons : qReport.reasons);
+      const itemEdge = isLicensed ? (activeItem?.edge ?? (activeItem?.snapshot?.edge ?? qReport.edge)) : 0;
+      const itemQuality = isLicensed ? (activeItem?.quality ?? (activeItem?.snapshot?.quality ?? qReport.quality)) : 0;
+      const itemProb = isLicensed
+        ? (activeItem?.conservativeProbability ?? activeItem?.probability ?? (activeItem?.snapshot?.conservativeProbability ?? activeItem?.snapshot?.probability ?? (qReport.conservativeProbability ?? qReport.probability)))
+        : 0.50;
+      const itemSubStrategy = isLicensed ? (activeItem?.subStrategy ?? activeItem?.strategyName ?? (activeItem?.snapshot?.subStrategy ?? activeItem?.snapshot?.strategyName ?? qReport.subStrategy)) : null;
+      const itemStrategyName = isLicensed ? (activeItem?.strategyName ?? activeItem?.subStrategy ?? (activeItem?.snapshot?.strategyName ?? activeItem?.snapshot?.subStrategy ?? qReport.strategyName)) : null;
+      const itemReasons = !isLicensed
+        ? ["Ative seu código de licença para liberar as análises em tempo real."]
+        : ((activeItem?.reasons && activeItem.reasons.length > 0) ? activeItem.reasons : ((activeItem?.snapshot?.reasons && activeItem.snapshot.reasons.length > 0) ? activeItem.snapshot.reasons : qReport.reasons));
+      const symState = !isLicensed ? "LICENSE_LOCKED" : (isReady ? MarketState.READY : report.state);
 
       symbolsMap[sym] = {
         frameStatus: typeof window !== "undefined" && window !== window.top ? "iframe conectado" : "conectado",
@@ -2230,10 +2305,10 @@ export class MarketAnalyzer {
         symbol: sym,
         pair: sym,
         action: displayAction,
-        rawAction: qReport.action,
+        rawAction: isLicensed ? qReport.action : "WAIT",
         strategyName: itemStrategyName,
         subStrategy: itemSubStrategy,
-        correlationGroup: qReport.correlationGroup,
+        correlationGroup: isLicensed ? qReport.correlationGroup : null,
         timeframe: `${this.timeframeSeconds / 60} minuto(s)`,
         timeframeSeconds: this.timeframeSeconds,
         tf: this.timeframeSeconds,
@@ -2241,21 +2316,22 @@ export class MarketAnalyzer {
         lastCandleTime: lastTimeStr,
         lastPrice: symPrice,
         gaps: report.gapCount,
-        state: isReady ? MarketState.READY : report.state,
-        status: isReady ? MarketState.READY : report.state,
+        state: symState,
+        status: symState,
+        licenseStatus,
         lifecycle,
         quantAction: displayAction,
         quantLabel: displayLabel,
         quantProbability: itemProb,
-        quantEV: qReport.ev,
+        quantEV: isLicensed ? qReport.ev : 0,
         edge: itemEdge,
         quality: itemQuality,
         conservativeProbability: itemProb,
         regime: qReport.regime,
         marketStability: qReport.marketStability,
         uncertainty: qReport.uncertainty,
-        strategiesResults: qReport.strategiesResults || [],
-        subStrategiesResults: qReport.subStrategiesResults || [],
+        strategiesResults: isLicensed ? (qReport.strategiesResults || []) : [],
+        subStrategiesResults: isLicensed ? (qReport.subStrategiesResults || []) : [],
         microstructure: microMetrics,
         quantReasons: itemReasons,
         payout: this.registry.get(sym).payout,
@@ -2288,6 +2364,7 @@ export class MarketAnalyzer {
       domSymbol,
       tf: this.timeframeSeconds,
       status: activeObj.state || "BOOTING",
+      licenseStatus,
       clockOffsetMs: marketClock.offsetMs,
       symbols: symbolsMap,
       allSymbols: Object.keys(symbolsMap),
