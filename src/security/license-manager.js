@@ -24,11 +24,11 @@ export const MAX_OBSERVED_TS_KEY = "ifx:security:max_ts_v1";
  */
 export const TELEGRAM_CONFIG = Object.freeze({
   channelName: "Inflitrus Signals Oficial",
-  channelHandle: "@inflitrus_signals",
-  channelUrl: "https://t.me/inflitrus_signals",
-  supportUrl: "https://t.me/inflitrus_signals",
-  CHANNEL_URL: "https://t.me/inflitrus_signals",
-  SUPPORT_URL: "https://t.me/inflitrus_signals",
+  channelHandle: "@infiltrussignals",
+  channelUrl: "https://t.me/infiltrussignals",
+  supportUrl: "https://t.me/infiltrussignals",
+  CHANNEL_URL: "https://t.me/infiltrussignals",
+  SUPPORT_URL: "https://t.me/infiltrussignals",
   vipDescription:
     "Entre no canal oficial no Telegram para receber atualizações, suporte e renovar ou adquirir sua licença de acesso.",
 });
