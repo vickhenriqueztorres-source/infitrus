@@ -269,6 +269,10 @@
     .lg-spec-chip b{display:block;color:#3FE0C5;font-size:8.5px;margin-bottom:1px}
 
     .license-gate-divider{height:1px;background:linear-gradient(90deg,transparent,rgba(138,155,163,.25),transparent);margin:10px 0}
+
+    /* Banner de Alerta / Anúncio Remoto */
+    .announcement-banner{display:flex;align-items:center;gap:8px;background:rgba(41,182,246,.12);border:1px solid rgba(41,182,246,.38);border-radius:9px;padding:8px 10px;margin:0 0 10px;font-size:10.5px;color:#B3E5FC;line-height:1.35}
+    .announcement-banner.warning{background:rgba(255,179,0,.14);border-color:rgba(255,179,0,.5);color:#FFE082}
   </style>
 </head>
 <body>
@@ -385,6 +389,12 @@
         <div class="asset-row"><span id="asset">---</span><span>·</span><span id="timeframe">M1</span><span>·</span><span id="window-tag" class="window-badge">Ventana 1</span></div>
         <p class="feed"><i id="feed-dot" class="dot amber"></i><span id="feed-copy">Datos inestables</span></p>
       </section>
+
+      <!-- Banner de Alerta / Anúncio Remoto (OTA) -->
+      <div id="remote-announcement-banner" class="announcement-banner" style="display:none;" role="status">
+        <span id="remote-announcement-icon" class="announcement-icon">📢</span>
+        <span id="remote-announcement-text" class="announcement-text"></span>
+      </div>
 
       <!-- Card Visual de Sinal M1 em Tempo Real -->
       <section id="signal-card" class="signal-card is-wait" aria-label="Señal M1" aria-live="polite">

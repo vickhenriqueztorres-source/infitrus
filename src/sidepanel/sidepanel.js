@@ -161,6 +161,27 @@ function playSoundList(sounds = []) {
   }
 }
 
+function updateRemoteAnnouncementUI(announcement, isKillSwitch, killSwitchReason) {
+  const banner = document.getElementById("remote-announcement-banner");
+  const textEl = document.getElementById("remote-announcement-text");
+  const iconEl = document.getElementById("remote-announcement-icon");
+  if (!banner || !textEl) return;
+
+  if (isKillSwitch) {
+    banner.style.display = "flex";
+    banner.className = "announcement-banner warning";
+    if (iconEl) iconEl.textContent = "⏸";
+    textEl.textContent = killSwitchReason || "Pausa técnica de mercado en curso.";
+  } else if (announcement) {
+    banner.style.display = "flex";
+    banner.className = "announcement-banner";
+    if (iconEl) iconEl.textContent = "📢";
+    textEl.textContent = announcement;
+  } else {
+    banner.style.display = "none";
+  }
+}
+
 /**
  * Atualiza o cronômetro M1 e a barra de contagem regressiva desacoplado via localMarketClock (T-06)
  * Card principal = UMA frase por estado, sem mensagens contraditórias.
@@ -179,6 +200,11 @@ function updateClockOnlyUI() {
   const hasSimultaneous = Boolean(cardData.tradeCard?.hasTrade && cardData.opportunityCard?.hasOpportunity);
   const activeDisplay = hasSimultaneous ? cardData.tradeCard : cardData;
 
+  const isKillActive = Boolean(activeSignalData?.isKillSwitchActive || latestRenderedState?.isKillSwitchActive);
+  const killReason = activeSignalData?.killSwitchReason || latestRenderedState?.killSwitchReason || "Pausa técnica de mercado.";
+  const remoteAnnouncement = activeSignalData?.remoteAnnouncement || latestRenderedState?.remoteAnnouncement || null;
+  updateRemoteAnnouncementUI(remoteAnnouncement, isKillActive, killReason);
+
   // 0. Atualiza Destaque Gigante do Ativo e Ordem no Topo do Card
   const heroAssetEl = document.getElementById("signal-hero-asset");
   if (heroAssetEl) {
@@ -194,7 +220,11 @@ function updateClockOnlyUI() {
     const isCall = dir === "CALL";
     const dirSymbol = isCall ? "▲" : "▼";
 
-    if (activeDisplay.phase === "ENTRY_NOW") {
+    if (isKillActive) {
+      heroActionEl.className = "hero-action-badge wait";
+      heroIconEl.textContent = "⏸";
+      heroOrderEl.textContent = "PAUSA TÉCNICA";
+    } else if (activeDisplay.phase === "ENTRY_NOW") {
       heroActionEl.className = `hero-action-badge execute ${isCall ? "call" : "put"}`;
       heroIconEl.textContent = dirSymbol;
       heroOrderEl.textContent = `¡ENTRA ${dir}! ${activeDisplay.secondsRemaining}s`;
@@ -243,8 +273,13 @@ function updateClockOnlyUI() {
     // 2. Badge de Fase / Direção
     const badge = document.getElementById("signal-direction-badge");
     if (badge) {
-      badge.className = `signal-badge ${activeDisplay.badgeClass}`;
-      badge.textContent = activeDisplay.badgeText;
+      if (isKillActive) {
+        badge.className = "signal-badge wait";
+        badge.textContent = "PAUSA TÉCNICA";
+      } else {
+        badge.className = `signal-badge ${activeDisplay.badgeClass}`;
+        badge.textContent = activeDisplay.badgeText;
+      }
     }
 
     // 3. Cronômetro / Contagem Regressiva
@@ -262,7 +297,9 @@ function updateClockOnlyUI() {
     // 4. Ícone do Card
     const iconEl = document.getElementById("signal-icon");
     if (iconEl) {
-      if (activeDisplay.phase === "ENTRY_NOW" || activeDisplay.phase === "PRE_SIGNAL" || activeDisplay.phase === "IN_TRADE") {
+      if (isKillActive) {
+        iconEl.textContent = "⏸";
+      } else if (activeDisplay.phase === "ENTRY_NOW" || activeDisplay.phase === "PRE_SIGNAL" || activeDisplay.phase === "IN_TRADE") {
         iconEl.textContent = activeDisplay.direction === "CALL" ? "▲" : "▼";
       } else if (activeDisplay.phase === "SETTLED") {
         iconEl.textContent = activeDisplay.badgeClass === "call" ? "✓" : activeDisplay.badgeClass === "put" ? "✗" : "―";
@@ -274,12 +311,12 @@ function updateClockOnlyUI() {
     // 5. Frase Principal Única e Linha Secundária
     const titleEl = document.getElementById("signal-title");
     if (titleEl) {
-      titleEl.textContent = activeDisplay.title || activeDisplay.primaryText;
+      titleEl.textContent = isKillActive ? "PAUSA TÉCNICA DE MERCADO" : (activeDisplay.title || activeDisplay.primaryText);
     }
 
     const subTitleEl = document.getElementById("signal-subtitle");
     if (subTitleEl) {
-      subTitleEl.textContent = activeDisplay.subTitle || activeDisplay.secondaryText || (activeSignalData?.subStrategy ? `Estrategia: ${activeSignalData.subStrategy}` : "");
+      subTitleEl.textContent = isKillActive ? killReason : (activeDisplay.subTitle || activeDisplay.secondaryText || (activeSignalData?.subStrategy ? `Estrategia: ${activeSignalData.subStrategy}` : ""));
     }
 
     // 6. Barra de Progresso ligada ao estado (não ao minuto cru)

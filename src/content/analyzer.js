@@ -34,6 +34,7 @@ import { logger } from "../utils/logger.js";
 import { initBridgeListener } from "./bridge.js";
 import { rec, configureFlightRecorder, generateUUID, hashCandles } from "../diagnostics/flight-recorder.js";
 import { licenseManager } from "../security/license-manager.js";
+import { remoteConfigManager } from "../security/remote-config-manager.js";
 
 /**
  * Extrai o símbolo de um payload heterogêneo de forma abrangente.
@@ -283,6 +284,8 @@ export class MarketAnalyzer {
       this.licenseManager.setEnforceMode(Boolean(options.enforceLicense));
     }
     this._unsubLicense = null;
+    this.remoteConfigManager = options.remoteConfigManager || remoteConfigManager;
+    this._unsubRemoteConfig = null;
     this.timeframeSeconds = 60; // Padrão M1
     this.currentSymbol = null;
     this.activeSymbols = new Set();
@@ -615,7 +618,50 @@ export class MarketAnalyzer {
     return this.licenseManager.isAuthorizedSync(nowMs);
   }
 
+  isKillSwitchActive() {
+    if (!this.remoteConfigManager) return false;
+    return Boolean(this.remoteConfigManager.isKillSwitchActive());
+  }
+
+  _applyRemoteConfigToRegistry() {
+    if (!this.remoteConfigManager) return;
+    const minEdge = this.remoteConfigManager.getMinEdge(0.015);
+    for (const [pair, portfolio] of this.registry.instances.entries()) {
+      if (portfolio) {
+        portfolio.minEdge = minEdge;
+        if (portfolio.opportunityPool) {
+          portfolio.opportunityPool.minEdge = minEdge;
+        }
+        if (portfolio.edgeSelector) {
+          portfolio.edgeSelector.minEdge = minEdge;
+        }
+      }
+    }
+  }
+
   init() {
+    if (this.remoteConfigManager) {
+      if (typeof this.remoteConfigManager.loadFromStorage === "function") {
+        this.remoteConfigManager.loadFromStorage().then(() => {
+          if (!this._isDestroyed) {
+            this._applyRemoteConfigToRegistry();
+            this.updatePanelDisplay({ immediate: true });
+          }
+        }).catch(() => {});
+      }
+      if (typeof this.remoteConfigManager.startPolling === "function" && typeof window !== "undefined") {
+        this.remoteConfigManager.startPolling();
+      }
+      if (typeof this.remoteConfigManager.subscribe === "function") {
+        this._unsubRemoteConfig = this.remoteConfigManager.subscribe(() => {
+          if (!this._isDestroyed) {
+            this._applyRemoteConfigToRegistry();
+            this.updatePanelDisplay({ immediate: true });
+          }
+        });
+      }
+    }
+
     if (this.licenseManager) {
       if (typeof this.licenseManager.refreshFromStorage === "function") {
         this.licenseManager.refreshFromStorage().then(() => {
@@ -1055,6 +1101,10 @@ export class MarketAnalyzer {
       try { this._unsubLicense(); } catch (_) {}
       this._unsubLicense = null;
     }
+    if (this._unsubRemoteConfig) {
+      try { this._unsubRemoteConfig(); } catch (_) {}
+      this._unsubRemoteConfig = null;
+    }
     if (this._domObserver) {
       try { this._domObserver.disconnect(); } catch (_) {}
       this._domObserver = null;
@@ -1210,6 +1260,20 @@ export class MarketAnalyzer {
         tf,
         current: null,
         trade: null,
+      };
+      return this.currentLifecycleSnapshot;
+    }
+
+    if (this.isKillSwitchActive()) {
+      this.decisionsBySymbol.clear();
+      this.lastCachedDecision = null;
+      this.currentLifecycleSnapshot = {
+        status: "KILL_SWITCH_ACTIVE",
+        pair: mainPair || null,
+        tf,
+        current: null,
+        trade: null,
+        reason: this.remoteConfigManager?.getKillSwitchReason() || "Pausa técnica de mercado.",
       };
       return this.currentLifecycleSnapshot;
     }
@@ -2274,16 +2338,19 @@ export class MarketAnalyzer {
           ? lifecycle.current
           : (isTradeActive ? lifecycle.trade : null));
 
-      const displayAction = isLicensed ? (activeItem?.direction || "WAIT") : "WAIT";
+      const isKillSwitch = this.isKillSwitchActive();
+      const displayAction = !isLicensed ? "WAIT" : (isKillSwitch ? "WAIT" : (activeItem?.direction || "WAIT"));
       const displayLabel = !isLicensed
         ? "LICENÇA BLOQUEADA"
-        : (activeItem
-          ? (activeItem.phase === Phase.ENTRY_NOW
-              ? "ENTRA AHORA"
-              : activeItem.phase === Phase.IN_TRADE
-                ? (isExpiring ? "EXPIRANDO" : "EN OPERACIÓN")
-                : "PRE-SEÑAL")
-          : "ESCANEANDO");
+        : (isKillSwitch
+          ? "PAUSA TÉCNICA"
+          : (activeItem
+            ? (activeItem.phase === Phase.ENTRY_NOW
+                ? "ENTRA AHORA"
+                : activeItem.phase === Phase.IN_TRADE
+                  ? (isExpiring ? "EXPIRANDO" : "EN OPERACIÓN")
+                  : "PRE-SEÑAL")
+            : "ESCANEANDO"));
 
       // Métricas determinísticas imutáveis de acordo com a fase:
       // Se há um item ativo (trade em curso ou pré-sinal), suas métricas congeladas têm prioridade absoluta
@@ -2296,8 +2363,10 @@ export class MarketAnalyzer {
       const itemStrategyName = isLicensed ? (activeItem?.strategyName ?? activeItem?.subStrategy ?? (activeItem?.snapshot?.strategyName ?? activeItem?.snapshot?.subStrategy ?? qReport.strategyName)) : null;
       const itemReasons = !isLicensed
         ? ["Ative seu código de licença para liberar as análises em tempo real."]
-        : ((activeItem?.reasons && activeItem.reasons.length > 0) ? activeItem.reasons : ((activeItem?.snapshot?.reasons && activeItem.snapshot.reasons.length > 0) ? activeItem.snapshot.reasons : qReport.reasons));
-      const symState = !isLicensed ? "LICENSE_LOCKED" : (isReady ? MarketState.READY : report.state);
+        : (isKillSwitch
+          ? [this.remoteConfigManager?.getKillSwitchReason() || "Pausa técnica de mercado."]
+          : ((activeItem?.reasons && activeItem.reasons.length > 0) ? activeItem.reasons : ((activeItem?.snapshot?.reasons && activeItem.snapshot.reasons.length > 0) ? activeItem.snapshot.reasons : qReport.reasons)));
+      const symState = !isLicensed ? "LICENSE_LOCKED" : (isKillSwitch ? "KILL_SWITCH_ACTIVE" : (isReady ? MarketState.READY : report.state));
 
       symbolsMap[sym] = {
         frameStatus: typeof window !== "undefined" && window !== window.top ? "iframe conectado" : "conectado",
@@ -2333,6 +2402,7 @@ export class MarketAnalyzer {
         strategiesResults: isLicensed ? (qReport.strategiesResults || []) : [],
         subStrategiesResults: isLicensed ? (qReport.subStrategiesResults || []) : [],
         microstructure: microMetrics,
+        reasons: itemReasons,
         quantReasons: itemReasons,
         payout: this.registry.get(sym).payout,
         signalsHistory: this.signalAuditor.getSignals().slice(0, 20),
@@ -2365,6 +2435,10 @@ export class MarketAnalyzer {
       tf: this.timeframeSeconds,
       status: activeObj.state || "BOOTING",
       licenseStatus,
+      isKillSwitchActive: this.isKillSwitchActive(),
+      killSwitchReason: this.isKillSwitchActive() ? this.remoteConfigManager?.getKillSwitchReason() : null,
+      remoteAnnouncement: this.remoteConfigManager?.getAnnouncement() || null,
+      remoteConfig: this.remoteConfigManager?.getConfig() || null,
       clockOffsetMs: marketClock.offsetMs,
       symbols: symbolsMap,
       allSymbols: Object.keys(symbolsMap),
